@@ -1,0 +1,1362 @@
+package inn.ocsf.kronos4j.vm;
+
+import org.apache.commons.lang3.NotImplementedException;
+import org.apache.commons.lang3.tuple.Pair;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class VirtualMachine {
+
+    public static final int AStackSize = 15;
+    public static final int Nil = 0x7FFFFF80;
+    public static final int ExternalBit = 31;
+
+    private VirtualMemory memory;
+
+    private List<VirtualDisk> disks = new ArrayList<>();
+
+    private int
+            ipt,
+            sp,
+            pc,
+            pcs,
+            ir,
+            p,
+            l,
+            g,
+            m,
+            h,
+            s,
+            f,
+    
+            pcode;
+
+    private int[] astack = new int[AStackSize];
+
+    public VirtualMachine(int memorySize) {
+        memory = new VirtualMemory(memorySize);
+    }
+
+    public void addDisk(VirtualDisk disk) {
+        disks.add(disk);
+    }
+
+    public int getDiskCount() {
+        return disks.size();
+    }
+
+    public VirtualDisk getDisk(int index) {
+        return disks.get(index);
+    }
+
+    public VirtualMemory getMemory() {
+        return memory;
+    }
+
+    public void run() throws InterruptedException {
+        //int a = 0;
+        boolean bDebug = false;
+        ipt = 0;
+        sp = 0;
+        p = mem(1);
+        restoreRegisters();
+        for (;;) {
+            if (ipt == 0) {
+                //TODO some complex timer logic
+            }
+            if (ipt != 0) {
+                trap(ipt);
+                ipt = 0;
+            }
+            pcs = pc;
+            ir = code(pc++);
+
+            switch (ir) {
+                case 0x0: case 0x1: case 0x2: case 0x3:
+                case 0x4: case 0x5: case 0x6: case 0x7:
+                case 0x8: case 0x9: case 0xA: case 0xB:
+                case 0xC: case 0xD: case 0xE: case 0xF:
+                    push(ir & 0xF); break;
+                case 0x10:  push(next());   break;
+                case 0x11:  push(next2());  break;
+                case 0x12:  push(next4());  break;
+                case 0x13:  push(Nil);      break;
+                case 0x14:  push(l+next()); break;
+                case 0x15:  push(g+next()); break;
+                case 0x16:  astack[sp-1] += next(); break;
+                case 0x17:  push(mem(mem(g - next() - 1)) + next());    break;
+                case 0x18:  if (pop() == 0) pc += next2();
+                else            pc += 2;
+                    break;
+                case 0x19:  pc += next2();  break;
+                case 0x1A:  if (pop() == 0) pc += next();
+                else            pc++;
+                    break;
+                case 0x1B:  pc += next();   break;
+                case 0x1C:  if (pop() == 0) pc -= next2();
+                else            pc += 2;
+                    break;
+                case 0x1D:  pc -= next2();  break;
+                case 0x1E:  if (pop() == 0) pc -= next();
+                else            pc++;
+                    break;
+                case 0x1F:  pc -= next();   break;
+
+                case 0x20:  push(mem(l + next()));  break;
+                case 0x21:  push(mem(g + next()));  break;
+                case 0x22:  push(mem(mem(mem(g - next() - 1)) + next())); break;
+
+                case 0x23:  push(mem(pop() + next()));  break;
+
+                case 0x24:  case 0x25:  case 0x26:  case 0x27:
+                case 0x28:  case 0x29:  case 0x2A:  case 0x2B:
+                case 0x2C:  case 0x2D:  case 0x2E:  case 0x2F:
+                    push(mem(l + (ir & 0xF)));
+                    break;
+
+                case 0x30:  mem(l + next(), pop()); break;
+                case 0x31:  mem(g + next(),  pop()); break;
+                case 0x32:  mem(mem(mem(g - next() - 1)) + next(),  pop()); break;
+                case 0x33:  { int i = pop(); mem(pop() + next(), i); break; }
+
+                case 0x34:  case 0x35:  case 0x36:  case 0x37:
+                case 0x38:  case 0x39:  case 0x3A:  case 0x3B:
+                case 0x3C:  case 0x3D:  case 0x3E:  case 0x3F:
+                    mem(l + (ir & 0xF),  pop());
+                    break;
+
+                case 0x40:  {   int i = pop();
+                    int j = pop();
+                    int s = mem(j + i / 4);
+                    //push(((byte)&s)[i % 4]); //TODO что-то странное
+                    throw new NotImplementedException();
+                    //break;
+                }
+
+                case 0x41:  push(mem(pop() + pop()));   break;
+
+                case 0x42:  case 0x43:
+                case 0x44:  case 0x45:  case 0x46:  case 0x47:
+                case 0x48:  case 0x49:  case 0x4A:  case 0x4B:
+                case 0x4C:  case 0x4D:  case 0x4E:  case 0x4F:
+                    push(mem(g + (ir & 0xF)));
+                    break;
+
+                case 0x50:
+                {
+                    int k = pop();
+                    int i = pop();
+                    int j = pop();
+                    int s = mem(j + i / 4);
+                    //((byte*)&s)[i % 4] = (byte)k; //TODO разобраться с reference
+                    mem(j + i / 4, s);
+                    throw new NotImplementedException();
+                    //break;
+                }
+
+                case 0x51:  { int i = pop(); mem(pop() + pop(),  i); break; }
+                case 0x52:  case 0x53:
+                case 0x54:  case 0x55:  case 0x56:  case 0x57:
+                case 0x58:  case 0x59:  case 0x5A:  case 0x5B:
+                case 0x5C:  case 0x5D:  case 0x5E:  case 0x5F:
+                    mem(g + (ir & 0xF),  pop());
+                    break;
+
+                case 0x60:  case 0x61:  case 0x62:  case 0x63:
+                case 0x64:  case 0x65:  case 0x66:  case 0x67:
+                case 0x68:  case 0x69:  case 0x6A:  case 0x6B:
+                case 0x6C:  case 0x6D:  case 0x6E:  case 0x6F:
+                    astack[sp-1] = mem(astack[sp-1] + (ir & 0xF));
+                    break;
+
+                case 0x70:  case 0x71:  case 0x72:  case 0x73:
+                case 0x74:  case 0x75:  case 0x76:  case 0x77:
+                case 0x78:  case 0x79:  case 0x7A:  case 0x7B:
+                case 0x7C:  case 0x7D:  case 0x7E:  case 0x7F:
+                {
+                    int i = pop(); mem(pop() + (ir & 0xF), i);
+                    break;
+                }
+
+                case 0x80: // I/O bus reset
+                    break;
+                case 0x81: // QUIT Stop processor
+                    bDebug = true;
+                    break;
+                    case 0x82: // GETM Get Mask
+                    push(m);
+                    break;
+                case 0x83: // SETM Set Mask
+                    m = pop();
+                    break;
+                case 0x84: // TRAP interrupt simulation
+                    ipt = pop();
+                    break;
+                case 0x85: // TRA  Transfer control between processes
+                {
+                    int i = pop(); transfer(i, pop());
+                    break;
+                }
+                case 0x86: // TR    Test & Reset
+                {
+                    int i = pop(); push(mem(i)); mem(i, 0);
+                    break;
+                }
+
+                case 0x87:  // IDLE
+                {
+                    pc--;
+                    Thread.sleep(1);
+                    // no enabled interrupts => infinite idle
+                    // dsu -p uses this to shutdown computer.
+                    if (m == 0)
+                    {
+                        //igd.shutdown(); //TODO igd
+                        return;
+                    }
+                    break;
+                }
+                case 0x88: // ADD
+                    if (sp <= 1) ipt = 0x4C;
+                    else { sp--; astack[sp-1] += astack[sp]; }
+                    break;
+
+                case 0x89: // sub
+                    if (sp <= 1) ipt = 0x4C;
+                    else { sp--; astack[sp-1] -= astack[sp]; }
+                    break;
+
+                case 0x8A: // mul
+                    if (sp <= 1) ipt = 0x4C;
+                    else { sp--; astack[sp-1] *= astack[sp]; }
+                    break;
+
+                case 0x8B: // div
+                    if (sp <= 1)
+                        ipt = 0x4C;
+                    else if (astack[sp-1] == 0)
+                    {
+                        ipt = 0x41; sp--; astack[sp-1] = 0;
+                    }
+                    else
+                    {
+                        sp--; astack[sp-1] = idiv(astack[sp-1], astack[sp]);
+                    }
+                    break;
+
+                case 0x8C: // SHL  integer SHift Left
+                {
+                    int i = pop() & 0x1F; push(pop() << i); break;
+                }
+
+                case 0x8D: // SHR  integer SHift Right
+                {
+                    int i = pop() & 0x1F; push(pop() >> i); break;
+                }
+
+                case 0x8E: // ROL  word ROtate Left
+                {   long i = (long) pop() & 0x1F;
+                    if (i != 0)
+                    {
+                        long j = (long) pop();
+                        push((int) ( (j << i) | (j >> (32-i))) );
+                    }
+                    break;
+                }
+                case 0x8F: // ROR  word ROtate Right
+                {
+                    long i = (long)pop() & 0x1F;
+                    if (i != 0)
+                    {
+                        long j = (long)pop();
+                        push((int) ( (j >> i) | (j << (32-i))));
+                    }
+                    break;
+                }
+
+                case 0x90:  case 0x91:  case 0x92:  case 0x93: case 0x94:   // io0..4
+                    io(ir & 0xF);
+                    break;
+
+                case 0x95: // rcmp A.K.A. ARRCMP array compare
+                {
+                    int sz = pop();
+                    int adr = pop();
+                    int adr1 = pop();
+                    if (sz < 0)
+                    {
+                        push(sz); ipt = 0x4F;
+                    }
+                    else if (sz == 0)
+                    {
+                        push(adr1);
+                        push(adr1);
+                    }
+                    else
+                    {
+                        for (;;)
+                        {
+                            if (mem(adr) != mem(adr1) || sz ==1)
+                            {
+                                push(adr1); push(adr); break;
+                            }
+                            sz--;
+                            adr++;
+                            adr1++;
+                        }
+                    }
+                    break;
+                }
+
+                case 0x96: // wmv A.K.A. WM     word move
+                {
+                    int sz = pop();
+                    int f  = pop();
+                    int t  = pop();
+                    if (t > f)
+                    {
+                        t = t + sz - 1;
+                        f = f + sz - 1;
+                        while (sz > 0)
+                        {
+                            mem(t, mem(f));
+                            t--; f--; sz--;
+                        }
+                    }
+                    else if (sz > 0)
+                    {
+                        byte[] mf = mmem(f, sz*4);
+                        mmem(t, sz*4, mf);
+                    }
+                    break;
+                }
+
+                case 0x97:  // BMV
+                {
+                    int sz = pop();
+                    int i = pop(); int j = pop();
+                    int a = pop(); int b = pop();
+                    bitmove(b, a, j, i, sz);
+                    break;
+                }
+
+                case 0x98:  case 0x99:  case 0x9A:  case 0x9B:
+                case 0x9C:  case 0x9D:  case 0x9E:  case 0x9F:
+                    fpu();
+                    break;
+                case 0xA0: // LSS  int LeSS
+                    if (sp <= 1) ipt = 0x4C;
+                    else { sp--; astack[sp-1] = astack[sp-1] < astack[sp] ? 1 : 0; }
+                    break;
+
+                case 0xA1:  // LEQ  int Less or EQual
+                    if (sp <= 1)
+                        ipt = 0x4C;
+                    else
+                    {
+                        sp--;
+                        astack[sp-1] = astack[sp-1] <= astack[sp] ? 1 : 0;
+                    }
+                    break;
+
+                case 0xA2: // GTR  int Greater or EQual
+                    if (sp <= 1)
+                        ipt = 0x4C;
+                    else
+                    {
+                        sp--;
+                        astack[sp-1] = astack[sp-1] > astack[sp] ?  1 : 0;
+                    }
+                    break;
+
+                case 0xA3:  // GEQ  int Greater or EQual
+                    if (sp <= 1)
+                        ipt = 0x4C;
+                    else
+                    {
+                        sp--;
+                        astack[sp-1] = astack[sp-1] >= astack[sp] ? 1 : 0;
+                    }
+                    break;
+
+                case 0xA4: // EQU  int EQUal
+                    if (sp <= 1)
+                        ipt = 0x4C;
+                    else
+                    {
+                        sp--;
+                        astack[sp-1] = astack[sp-1] == astack[sp] ? 1 : 0;
+                    }
+                    break;
+
+                case 0xA5:  // NEQ  int Not EQual
+                    if (sp <= 1)
+                        ipt = 0x4C;
+                    else
+                    {
+                        sp--; astack[sp-1] = astack[sp-1] != astack[sp] ? 1 : 0;
+                    }
+                    break;
+
+                case 0xA6:  // ABS  int ABSolute value
+                {
+                    int i = pop();
+                    push(i < 0 ? -i : i);
+                    break;
+                }
+                case 0xA7:  push(-pop()); break;
+                case 0xA8:  push(pop() | pop()); break;
+                case 0xA9:  push(pop() & pop()); break;
+                case 0xAA:  push(pop() ^ pop()); break;
+                case 0xAB:
+                {
+                    int i = pop();
+                    push(pop() & ~i);
+                    break;
+                }
+                case 0xAC:  // IN   membership to bitset 
+                {   int i = pop();
+                    int j = pop();
+                    push(j >= 0 && j < 32 ? (((1 << j) & i) != 0 ? 1 : 0) : 0); //TODO replace 1U
+                    break;
+                }
+                case 0xAD:  // BIT  setBIT 
+                {
+                    int i = pop();
+                    if (i < 0 || i >= 32)
+                        ipt = 0x4A;
+                    else
+                        push(1 << i); //TODO replace 1U
+                    break;
+                }
+                case 0xAE:  // NOT  boolean NOT (not bit per bit!) 
+                    push(pop() == 0 ? 1 : 0);
+                    break;
+                case 0xAF:  // MOD  integer MODulo
+                {
+                    if (sp <= 1)
+                        ipt = 0x4C;
+                    else if (astack[sp-1] == 0)
+                    {
+                        ipt = 0x41; sp--; astack[sp-1] = 0;
+                    }
+                    else
+                    {
+                        sp--; astack[sp-1] = imod(astack[sp-1], astack[sp]);
+                    }
+                    break;
+                }
+
+                case 0xB0:  // DECS  DECriment S register (reverse to ALLOC) 
+                {
+                    s -= pop();
+                    break;
+                }
+
+                case 0xB1: // DROP
+                    pop();
+                    break;
+
+                case 0xB2: // LODF  reLOaD expr. stack after Function return
+                {
+                    int i = pop();
+                    restoreStack();
+                    push(i);
+                    break;
+                }
+
+                case 0xB3: // STORE STORE expr. stack before function call
+                    if (s + 8 > h)
+                    {
+                        pc--; ipt = 0x40;
+                    }
+                    else
+                        saveStack();
+                    break;
+
+                case 0xB4:  // STOFV STOre expr. stack with Formal function Value
+                    // on top before function call (see: CF)
+                    if (s + 8 > h) { pc--; ipt = 0x40; }
+                    else
+                    {
+                        int i = pop();
+                        saveStack();
+                        mem(s++, i);
+                    }
+                    break;
+
+                case 0xB5: // COPT  COPy Top of expr. stack
+                {
+                    int i = pop();
+                    push(i);
+                    push(i);
+                    break;
+                }
+
+                case 0xB6:  // CpcOP Character array Parameter COPy
+                {
+                    int i = pop();
+                    int j = i / 4 + 1;
+                    if (j > h - s) { push(i); pc--; ipt = 0x40; }
+                    else if (j < 0)
+                        ipt = 0x4A;
+                    else
+                    {
+                        mem(l + next(), s);
+                        i = pop();
+                        while (j-- > 0)
+                            mem(s++, mem(i++));
+                    }
+                    break;
+                }
+
+                case 0xB7:  // pcOP  structure Parameter allocate and COPy
+                {
+                    int i = pop();
+                    int j = i + 1;
+                    if (j > h - s) { push(i); pc--; ipt = 0x40; }
+                    else if (j < 0)
+                        ipt = 0x4A;
+                    else
+                    {
+                        mem(l + next(), s);
+                        i = pop();
+                        while (j-- > 0)
+                            mem(s++, mem(i++));
+                    }
+                    break;
+                }
+
+                case 0xB8: // FOR1  enter  FOR statment
+                {
+                    if (s + 2 > h) { pc--; ipt = 0x40; }
+                    else
+                    {
+                        int i = next();
+                        int hi = pop();
+                        int low = pop();
+                        int adr = pop();
+                        int j = next2() + pc;
+                        if (i == 0 && low <= hi || i != 0 && low >= hi)
+                        {
+                            mem(adr, low);
+                            mem(s++, adr);
+                            mem(s++, hi);
+                        }
+                        else
+                            pc = j;
+                    }
+                    break;
+                }
+
+                case 0xB9: // FOR2  end of FOR statment
+                {
+                    int hi  = mem(s-1);
+                    int adr = mem(s-2);
+                    int sz  = next();
+                    int j   = -next2() + pc;
+                    if ((0x80 & sz) == 1)
+                        sz -= 256;
+                    int i = mem(adr);
+                    i += sz;
+                    if (sz >=0 && i > hi || sz <= 0 && i < hi)
+                        s -= 2;
+                    else
+                    {
+                        mem(adr, i);
+                        pc = j;
+                    }
+                    break;
+                }
+
+                case 0xBA: // ENTC Enter CASE
+                {
+                    if (s + 1 > h)
+                    {
+                        pc--; ipt = 0x40;
+                    }
+                    else
+                    {
+                        pc += next2();
+                        int j = pop();
+                        int low = next2();
+                        int hi = next2();
+                        int i = pc + 2 * (hi - low) + 4;
+                        mem(s++, i);
+                        if (j >= low && j <= hi) pc += (j-low+1)*2;
+                        pc -= next2();
+                    }
+                    break;
+                }
+
+                case 0xBB:  // XIT  eXIT from case or control structure 
+                    s--;
+                    pc = mem(s);
+                    break;
+
+                case 0xBC:  // ADDpc  add to program counter 
+                    push(pop() + pc);
+                    break;
+
+                case 0xBD: // JMP
+                    pc = pop();
+                    break;
+
+                case 0xBE: // ORJP   short circuit OR  JumP 
+                    if (pop() != 0)
+                    {
+                        push(1);
+                        pc = next() + pc;
+                    }
+                    else
+                        pc++;
+                    break;
+
+                case 0xBF: // ANDJP  short circuit AND JumP 
+                    if (pop() == 0)
+                    {
+                        push(0);
+                        pc = next() + pc;
+                    }
+                    else
+                        pc++;
+                    break;
+
+                case 0xC0: // MOVE   MOVE block
+                {
+                    int sz = pop();
+                    int j = pop() & ~0xC0000000; // -{30,31}
+                    int i = pop() & ~0xC0000000; // -{30,31}
+                    if (sz < 0)
+                        ipt = 0x4A;
+                    else
+                    {
+                        while (sz > 0 && ipt != 3)
+                        {
+                            mem(i++, mem(j++));
+                            sz--;
+                            if (memory.isOutOfRange())
+                                ipt = 3;
+                        }
+                    }
+                    break;
+                }
+
+                case 0xC1: // CHKNIL check address for NIL
+                {
+                    int i = astack[sp-1];
+                    if (i == Nil)
+                        ipt = 3; // original doc says: 0x41 - I think 3 is better
+                    break;
+                }
+
+                case 0xC2: // LSTA  Load STring Address
+                    push(mem(g + 1) + next2());
+                    break;
+
+                case 0xC3: // COMP  COMPare strings
+                {
+                    int i = pop();
+                    int j = pop();
+                    byte pa = (byte) mem(i);
+                    byte pb = (byte) mem(j);
+                    byte a = pa++;
+                    byte b = pb++;
+                    while (a == b && b != 0 && a != 0)
+                    {
+                        a = pa++;
+                        b = pb++;
+                    }
+                    push(b); push(a); // bug in docs!!!
+                    break;
+                }
+
+                case 0xC4: // GB  Get procedure Base n level down
+                {
+                    int i = l;
+                    int j = next();
+                    while (j-- > 0)
+                        i = mem(i);
+                    push(i);
+                    break;
+                }
+
+                case 0xC5: // GB1
+                    push(mem(l));
+                    break;
+
+                case 0xC6: // CHK  array boundary CHecK 
+                    if (sp < 3)
+                        ipt = 0x4C;
+                    else
+                    {
+                        int i = astack[sp-3];
+                        if (i < astack[sp-2] || i > astack[sp-1])
+                            ipt=0x4A;
+                        else
+                            sp -= 2;
+                    }
+                    break;
+
+                case 0xC7: // CHKZ  array boundary CHecK (low=Zero)
+                    if (sp < 2)
+                        ipt = 0x4C;
+                    else
+                    {
+                        int i = astack[sp-2];
+                        if (i < 0 || i > astack[sp-1])
+                            ipt=0x4A;
+                        else sp--;
+                    }
+                    break;
+
+                case 0xC8: // ALLOC ALLOCate block
+                {
+                    int sz = pop();
+                    if ( s + sz > h) { push(sz); pc--; ipt = 0x40; }
+                    else { push(s); s += sz; }
+                    break;
+                }
+
+                case 0xC9: // ENTR  ENTeR procedure 
+                {
+                    int sz = next();
+                    if (s + sz > h)
+                    {
+                        pc -= 2; ipt = 0x40;
+                    }
+                    else
+                        s += sz;
+                    break;
+                }
+
+                case 0xCA: // RTN   ReTurN from procedure
+                {
+                    s = l;
+                    l = mem(s + 1);
+                    int i = mem(s + 2);
+                    pc = i & 0xFFFF;
+                    if (((1 << ExternalBit) & i) == 1) //TODO replace 1U
+                    {
+                        g = mem(s);
+                        f = mem(g);
+                        pcode = getCode(f);
+                    }
+                    break;
+                }
+
+                case 0xCB: // NOP
+                    break;
+
+                case 0xCC: // CX    Call eXternal 
+                    if (s + 4 > h)
+                    {
+                        pc--;  ipt = 0x40;
+                    }
+                    else
+                    {
+                        int k = mem(g - next() - 1);
+                        int j = k & 0x3FFFFF; // *{0..21}
+                        int i = next();
+                        mark(g, true);
+                        g = mem(j);
+                        f = mem(g);
+                        pcode = getCode(f);
+                        pc = mem(f+i);
+                    }
+                    break;
+
+                case 0xCD: // CI    Call procedure at Intermediate level
+                    if (s + 4 > h)
+                    {
+                        pc--; ipt = 0x40;
+                    }
+                    else { int i = next(); mark(pop(), false); pc = mem(f+i); }
+                    break;
+
+                case 0xCE: // CF    Call Formal procedure
+                    if (s + 3 > h)
+                    {
+                        pc--; ipt = 0x40;
+                    }
+                    else
+                    {
+                        s--;
+                        int i = mem(s);
+                        mark(g, true);
+                        int j = i;//((byte*)&i)[3]; //TODO byte*
+                        i = i & 0xFFFFFF; // *{0..23};
+                        g = mem(i);
+                        f = mem(g);
+                        pcode = getCode(f);
+                        pc = mem(f + j);
+                    }
+                    break;
+
+                case 0xCF: // CL    Call Local procedure
+                    if (s + 4 > h)
+                    {
+                        pc--; ipt = 0x40;
+                    }
+                    else
+                    {
+                        int i = next(); mark(l, false); pc = mem(f + i);
+                    };
+                    break;
+
+                case 0xD0:  case 0xD1:  case 0xD2:  case 0xD3:
+                case 0xD4:  case 0xD5:  case 0xD6:  case 0xD7:
+                case 0xD8:  case 0xD9:  case 0xDA:  case 0xDB:
+                case 0xDC:  case 0xDD:  case 0xDE:  case 0xDF:
+                    if (s + 4 > h)
+                    {
+                        pc--;
+                        ipt = 0x40;
+                    }
+                    else
+                    {
+                        mark(l, false);
+                        pc = mem(f + (ir & 0xF));
+                    }
+                    break;
+
+                case 0xE0:  // INCL
+                {
+                    int i = pop();
+                    int j = pop() + (i >> 5);
+                    i = i & 0x1F;
+                    mem(j, mem(j) | (1 << i)); //TODO replace 1U
+                    break;
+                }
+
+                case 0xE1:  // EXCL
+                {
+                    int i = pop();
+                    int j = pop() + (i >> 5);
+                    i = i & 0x1F;
+                    mem(j, mem(j) & ~(1 << i)); //TODO replace 1U
+                    break;
+                }
+
+                case 0xE2:  // INL  membership IN Long set
+                {
+                    int k = pop();
+                    int j = pop();
+                    int i = pop();
+                    if (i < 0 || i >= k)
+                        push(0);
+                    else
+                        push( ((1 << (i & 0x1F)) & mem(j + (i >> 5))) != 0 ? 1 : 0); //TODO replace 1U
+                    break;
+                }
+
+                case 0xE3:  // QUOT
+                {
+                    quote(next());
+                    break;
+                }
+
+
+                case 0xE4: // INC1  INCrement by 1
+                {   int i = pop(); mem(i, mem(i) + 1);
+                    break;
+                }
+
+                case 0xE5: // DEC1  DECrement by 1
+                {   int i = pop(); mem(i, mem(i) - 1);
+                    break;
+                }
+
+                case 0xE6: // INC   INCrement
+                {   int i = pop(); int j = pop(); mem(j, mem(j) + i);
+                    break;
+                }
+
+                case 0xE7: // DEC   DECrement
+                {
+                    int i = pop(); int j = pop(); mem(j, mem(j) - i);
+                    break;
+                }
+
+                case 0xE8: // STOT  STOre Top on proc stack
+                    if (s + 1 > h)
+                    {
+                        pc--; ipt = 0x40;
+                    }
+                    else
+                        mem(s++, pop());
+                    break;
+
+                case 0xE9: // LODT  LOaD   Top of proc stack
+                    push(mem(--s));
+                    break;
+
+                case 0xEA: // LXA   Load indeXed Address
+                {
+                    int sz = pop();
+                    int i = pop();
+                    push(pop() + i * sz);
+                    break;
+                }
+
+                case 0xEB:  // Lpc   Load Procedure Constant
+                {
+                    int i = next();
+                    int j = next();
+                    i = mem(g - i - 1);
+                    //((byte*)&i)[3] = (byte)j; //TODO byte*
+                    push(i);
+                    break;
+                }
+
+                case 0xEC: // BBU  Bit Block Unpack
+                {
+                    int sz = pop();
+                    if (sz < 1 || sz > 32)
+                    {
+                        push(sz);
+                        pc--;
+                        ipt = 0x4A;
+                    }
+                    int i = pop();
+                    int adr = pop();
+                    push(bbu(adr, i, sz));
+                    break;
+                }
+
+                case 0xED: // BBP  Bit Block Pack
+                {
+                    int j  = pop();
+                    int sz = pop();
+                    if (sz < 1 || sz > 32)
+                    {
+                        push(sz);
+                        pc--;
+                        ipt = 0x4A;
+                    }
+                    int i = pop();
+                    int adr = pop();
+                    bbp(adr, i, sz, j);
+                    break;
+                }
+
+                case 0xEE: // BBLT Bit BLock Transfer
+                {
+                    int sz = pop();
+                    int i = pop();
+                    int j = pop();
+                    int a = pop();
+                    int b = pop();
+                    bitblt(b, a, j, i, sz);
+                    break;
+                }
+
+                case 0xEF: // PDX Prepare Dynamic indeX
+                {
+                    int i = pop(); /* index */
+                    int j = pop(); /* desc. address */
+                    int k = mem(j);  /* address */
+                    j = mem(j + 1); /* length  */
+                    push(k);
+                    push(i);
+                    if (i < 0 || i > j)
+                        ipt = 0x4A;
+                    break;
+                }
+
+                case 0xF0: // SWAP
+                {   int i = pop(); int j = pop(); push(i); push(j);
+                    break;
+                }
+
+                case 0xF1: // LPA Load Parameter Address
+                    push(l - next() - 1);
+                    break;
+
+                case 0xF2: // LPW Load Parameter WORD
+                    push(mem(l - next() - 1));
+                    break;
+
+                case 0xF3: // SPW Store Parameter WORD
+                    mem(l - next() - 1, pop());
+                    break;
+
+                case 0xF4: // SSWU Store Stack Word Undestructive
+                {   int i = pop();
+                    mem[pop()] = i; push(i);
+                    break;
+                }
+
+                case 0xF5: // RCHK  range CHecK
+                {
+                    int i = pop(); int j = pop(); int k = pop();
+                    if (k >= j && k <= i)
+                        push(1);
+                    else
+                        push(0);
+                    break;
+                }
+
+                case 0xF6: // RCHZ range check (low=Zero)
+                {
+                    int i = pop(); int k = pop();
+                    if (k >= 0 && k <= i) push(1); else push(0);
+                    break;
+                }
+
+
+                case 0xF7: // CM Call procedure from dynamic Module
+                {
+                    if (S + 4 <= H)
+                    {
+                        int i = next();
+                        S--;
+                        int j = mem[S];
+                        mark(G,TRUE);
+                        G = j;
+                        F = mem[G];
+                        pc = mem[F + i];
+                    }
+                    else
+                    {
+                        pc--;
+                        ipt = 0x40;
+                    }
+                    break;
+                }
+
+                case 0xF8: // CHKBX  CHecK BoX
+                {
+                    int p0 = pop();
+                    int p1 = pop();
+                    int x00 =  mem[p0]      % 0x10000;
+                    int y00 = (mem[p0]<<16) % 0x10000;
+                    p0++;
+                    int x01 =  mem[p0]      % 0x10000;
+                    int y01 = (mem[p0]<<16) % 0x10000;
+                    int x10 =  mem[p1]      % 0x10000;
+                    int y10 = (mem[p1]<<16) % 0x10000;
+                    p1++;
+                    int x11 =  mem[p1]      % 0x10000;
+                    int y11 = (mem[p1]<<16) % 0x10000;
+                    push(x10 <= x01 && y10 <= y01 && x00 <= x11 && y00 <= y11);
+                    break;
+                }
+
+                case 0xF9:  // bmg
+                    BMG(next());
+                    break;
+
+                case 0xFA:  // active
+                    push(P);
+                    break;
+
+
+                case 0xFB: // USR User defined functions
+                {
+                    int op = next();
+                    switch (op)
+                    {
+                        case 0:
+                        {
+                            // str: ARRAY OF CHAR
+                            int len = pop();
+                            //unused(len);
+                            //const byte* psz = (const byte*)&mem[pop()]; //TODO byte*
+                            //printf("%s\n", psz);
+                            //trace("%s\n", psz);
+                            break;
+                        }
+                        default:
+                            ipt = 0x7;
+                            break;
+                    }
+                    break;
+                }
+
+                case 0xFC:
+                    switch (next())
+                    {
+                        case 0x0: // cpu vers. */
+                            push(7); break;
+                        case 0x1:
+                            System.out.printf ("\n%08X\n", pop()); break;
+                        case 0x2: // microcode vers.
+                            push(2); break;
+                        default:
+                            pc--; ipt = 7;
+                    }
+                    break;
+
+                case 0xFD: // NII Never Implemented Instruction
+                    ipt = 0x7;
+                    break;
+
+                case 0xFE:
+                {
+                    int i = pop();
+                    printf("%08X\n", i);
+                    trace("%08X\n", i);
+                    break;
+                }
+
+                case 0xFF:
+                    ipt = 0x49;
+                    break;
+
+                default:
+                    ipt = 0x7;
+                    break;
+            }
+            if (ipt == 0 && S > H || S == 0)
+            {
+                throw new RuntimeException();
+            }
+        }
+        saveRegisters();
+    }
+
+    private void bitblt(int b, int a, int j, int i, int sz) {
+       //if (bits < 0 || dofs < 0 || sofs < 0)
+       //{
+       //    Ipt = 0x4A;
+       //    return;
+       //}
+       //dword  test = mem[dst]
+       //        | mem[src]
+       //        | mem[dst + ((dofs + bits + 31) >> 5)]
+       //        | mem[src + ((sofs + bits + 31) >> 5)];
+       //unused(test);
+       //if (mem.OutOfRange())
+       //{
+       //    Ipt = 3;
+       //    return;
+       //}
+       //dword* pdst = (dword*)(const byte*)&mem[dst + (dofs >> 5)];
+       //dword* psrc = (dword*)(const byte*)&mem[src + (sofs >> 5)];
+       //bitBlt(pdst, dofs & 0x1F, psrc, sofs & 0x1F, bits);
+        throw new NotImplementedException();
+    }
+
+    private void bbp(int adr, int i, int sz, int j) {
+        //dword wmask = (1U << sz) - 1;
+        //qword  q = j & wmask;
+        //qword mask = wmask;
+        //q = q << (i & 0x1F);
+        //mask = mask << (i & 0x1F);
+        //qword* pq = (qword*)(const byte*)&mem[adr + (i >> 5)];
+        //*pq = (*pq & ~mask) | q;
+        throw new NotImplementedException();
+    }
+
+    private int bbu(int adr, int i, int sz) {
+        //qword q = *(qword*)(const byte*)&mem[adr + (i >> 5)];
+        //q = q >> (i & 0x1F);
+        //dword d = (dword)q;
+        //return d & ((1 << sz) - 1);
+        throw new NotImplementedException();
+    }
+
+    private void quote(int op) {
+        // X MOD N = X - (X QOU N) * N
+        switch (op)
+        {
+            case 0: // SHRQ ??? (not tested) probably used by Portable C Compiler only
+                if (sp <= 1)
+                    Ipt = 0x4C;
+                else
+                {
+                    sp--; AStack[sp-1] = dword(AStack[sp-1]) >> dword(AStack[sp]);
+                }
+                break;
+            case 1: // QUOT
+                if (sp <= 1)
+                    Ipt = 0x4C;
+                else
+                {
+                    sp--; AStack[sp-1] /= AStack[sp];
+                }
+                break;
+            case 2: // ANDQ ??? (not tested) probably used by Portable C Compiler only
+                if (sp <= 1)
+                    Ipt = 0x4C;
+                else
+                {
+                    sp--; AStack[sp-1] &= ((1 << AStack[sp]) - 1);
+                }
+                break;
+            case 3: // REM
+                if (sp <= 1)
+                    Ipt = 0x4C;
+                else
+                {
+                    sp--; AStack[sp-1] %= AStack[sp];
+                }
+                break;
+            default:
+                Ipt = 7;
+                pc -= 2;
+                break;
+        }
+    }
+
+    private void mark(int x, boolean extern) {
+        int i = s;
+        mem(s++, x);
+        mem(s++, l);
+        if (extern)
+            mem(s, pc | (1 << ExternalBit)); //TODO replace 1U
+        else
+            mem(s, pc);
+        s += 2;
+        l = i;
+    }
+
+    private int getCode(int f) {
+        if (f < 0 || f > memory.getSize())
+            ipt = 3;
+        return mem(f % memory.getSize()); //TODO byte*
+    }
+
+    private void saveStack() {
+        throw new NotImplementedException();
+    }
+
+    private void restoreStack() {
+        throw new NotImplementedException();
+    }
+
+    private int imod(int x, int y) {
+        var ret = _idiv(x, y);
+        return ret.getRight();
+    }
+
+    private void fpu() {
+        throw new NotImplementedException();
+    }
+
+    private void bitmove(int dst, int _dofs, int src, int _sofs, int bits) {
+        throw new NotImplementedException();
+    }
+
+    private void mmem(int idx, int length, byte[] block) {
+        
+    }
+
+    private byte[] mmem(int idx, int length) {
+        return null;
+    }
+
+    private void io(int no) {
+        throw new NotImplementedException();
+    }
+
+    long qabs(long x) { return x >= 0 ? x : -x; }
+
+    Pair<Integer, Integer> _idiv(long x, long y)
+    {
+        //assert(y != 0);
+        long z  = 0;
+        long bt = 1;
+        while (qabs(x) > qabs(y))
+        {
+            bt = bt << 1;
+            y  = y << 1;
+        };
+        for (;;)
+        {
+            if ((x >= 0) == (y >= 0))
+            {
+                if (y < 0)
+                {
+                    if (x <= y) { x = x - y;    z = z + bt; }
+                }
+                else
+                {
+                    if (x >= y) { x = x - y;    z = z + bt; }
+                }
+            }
+            else
+            {
+                if (y < 0)
+                {
+                    if (x > 0) { x = x + y;     z = z - bt; }
+                }
+                else
+                {
+                    if (x < 0) { x = x + y;     z = z - bt; }
+                }
+            }
+            if (bt == 1)
+                break;
+            bt = bt >> 1;
+            if (y > 0)
+                y = (y & ~0x1) >> 1;
+            else
+                y = (y | 0x1) >> 1;
+        }
+        return Pair.of((int)z, (int)x);
+    }
+
+    private int idiv(int x, int y) {
+        int rem = 0;
+        var ret =  _idiv(x, y);
+        rem = ret.getRight();
+        return ret.getLeft();
+    }
+
+    private void transfer(int p_to, int p_from) {
+
+    }
+
+    private int pop() {
+        if (sp > 0)
+            return astack[--sp];
+        ipt = 0x4C;
+        return 0;
+    }
+
+    private int next4() {
+        int pc = this.pc;
+        this.pc += 4;
+        return code(pc);
+    }
+
+    private int next2() {
+        int pc = this.pc;
+        this.pc += 2;
+        return (short) code(pc);
+    }
+
+    private int next() {
+        return code(pc++);
+    }
+
+    private void push(int w) {
+        if (sp >= 0 && sp < AStackSize)
+            astack[sp++]=w;
+        else
+            ipt = 0x4C;
+    }
+
+    private byte mem(int idx) {
+        return 0;
+    }
+
+    private void mem(int idx, int val) {
+
+    }
+
+    private byte code(int idx) {
+        return 0;
+    }
+
+    private void trap(int ipt) {
+
+    }
+
+    private void restoreRegisters() {
+
+    }
+}

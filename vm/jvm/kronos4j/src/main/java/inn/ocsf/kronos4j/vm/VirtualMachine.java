@@ -2,6 +2,8 @@ package inn.ocsf.kronos4j.vm;
 
 import org.apache.commons.lang3.NotImplementedException;
 import org.apache.commons.lang3.tuple.Pair;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -11,6 +13,8 @@ public class VirtualMachine {
     public static final int AStackSize = 15;
     public static final int Nil = 0x7FFFFF80;
     public static final int ExternalBit = 31;
+
+    private Logger log = LoggerFactory.getLogger(VirtualMachine.class);
 
     private VirtualMemory memory;
 
@@ -28,14 +32,20 @@ public class VirtualMachine {
             m,
             h,
             s,
-            f,
-    
-            pcode;
+            f;
+    private boolean bDebug = false;
+
+    private VirtualMemory.VirtualMemoryPointer pcode;
 
     private int[] astack = new int[AStackSize];
 
     public VirtualMachine(int memorySize) {
         memory = new VirtualMemory(memorySize);
+        pcode = pmem(0);
+    }
+
+    private VirtualMemory.VirtualMemoryPointer pmem(int addr) {
+        return memory.getPointer(addr);
     }
 
     public void addDisk(VirtualDisk disk) {
@@ -56,14 +66,37 @@ public class VirtualMachine {
 
     public void run() throws InterruptedException {
         //int a = 0;
-        boolean bDebug = false;
+        bDebug = false;
         ipt = 0;
         sp = 0;
         p = mem(1);
+        boolean bTimer = false;
         restoreRegisters();
         for (;;) {
             if (ipt == 0) {
-                //TODO some complex timer logic
+                if (memory.isOutOfRange())
+                    ipt = 3;
+                else if (bTimer)
+                {
+                    if ((m & 0x2) != 0)
+                    {
+                        bTimer = false;
+                        ipt = 1; // timer ipt
+                    }
+                }
+                else if ((m & 0x1) != 0)
+                {
+                    //SIO *s = sios.inpReady();
+
+                   // if (s != NULL)
+                   //     Ipt = s->ipt();
+                   // else
+                   // {
+                   //     s = sios.outReady();
+                   //     if (s != NULL)
+                   //         Ipt = s->ipt() + 1;
+                   // }
+                }
             }
             if (ipt != 0) {
                 trap(ipt);
@@ -128,10 +161,9 @@ public class VirtualMachine {
 
                 case 0x40:  {   int i = pop();
                     int j = pop();
-                    int s = mem(j + i / 4);
-                    //push(((byte)&s)[i % 4]); //TODO что-то странное
-                    throw new NotImplementedException();
-                    //break;
+                    VirtualMemory.VirtualMemoryPointer s = pmem(j + i / 4);
+                    push((byte) s.getValue(i % 4));
+                    break;
                 }
 
                 case 0x41:  push(mem(pop() + pop()));   break;
@@ -984,7 +1016,7 @@ public class VirtualMachine {
 
                 case 0xF4: // SSWU Store Stack Word Undestructive
                 {   int i = pop();
-                    mem[pop()] = i; push(i);
+                    mem(pop(),  i); push(i);
                     break;
                 }
 
@@ -1008,15 +1040,15 @@ public class VirtualMachine {
 
                 case 0xF7: // CM Call procedure from dynamic Module
                 {
-                    if (S + 4 <= H)
+                    if (s + 4 <= h)
                     {
                         int i = next();
-                        S--;
-                        int j = mem[S];
-                        mark(G,TRUE);
-                        G = j;
-                        F = mem[G];
-                        pc = mem[F + i];
+                        s--;
+                        int j = mem(s);
+                        mark(g, true);
+                        g = j;
+                        f = mem(g);
+                        pc = mem(f + i);
                     }
                     else
                     {
@@ -1030,26 +1062,26 @@ public class VirtualMachine {
                 {
                     int p0 = pop();
                     int p1 = pop();
-                    int x00 =  mem[p0]      % 0x10000;
-                    int y00 = (mem[p0]<<16) % 0x10000;
+                    int x00 =  mem(p0)      % 0x10000;
+                    int y00 = (mem(p0)<<16) % 0x10000;
                     p0++;
-                    int x01 =  mem[p0]      % 0x10000;
-                    int y01 = (mem[p0]<<16) % 0x10000;
-                    int x10 =  mem[p1]      % 0x10000;
-                    int y10 = (mem[p1]<<16) % 0x10000;
+                    int x01 =  mem(p0)      % 0x10000;
+                    int y01 = (mem(p0)<<16) % 0x10000;
+                    int x10 =  mem(p1)      % 0x10000;
+                    int y10 = (mem(p1)<<16) % 0x10000;
                     p1++;
-                    int x11 =  mem[p1]      % 0x10000;
-                    int y11 = (mem[p1]<<16) % 0x10000;
-                    push(x10 <= x01 && y10 <= y01 && x00 <= x11 && y00 <= y11);
+                    int x11 =  mem(p1)      % 0x10000;
+                    int y11 = (mem(p1)<<16) % 0x10000;
+                    push(x10 <= x01 && y10 <= y01 && x00 <= x11 && y00 <= y11 ? 1 : 0);
                     break;
                 }
 
                 case 0xF9:  // bmg
-                    BMG(next());
+                    bmg(next());
                     break;
 
                 case 0xFA:  // active
-                    push(P);
+                    push(p);
                     break;
 
 
@@ -1096,8 +1128,8 @@ public class VirtualMachine {
                 case 0xFE:
                 {
                     int i = pop();
-                    printf("%08X\n", i);
-                    trace("%08X\n", i);
+                    System.out.printf("%08X\n", i);
+                    //trace("%08X\n", i);
                     break;
                 }
 
@@ -1109,12 +1141,118 @@ public class VirtualMachine {
                     ipt = 0x7;
                     break;
             }
-            if (ipt == 0 && S > H || S == 0)
+            if (ipt == 0 && s > h || s == 0)
             {
                 throw new RuntimeException();
             }
+            saveRegisters();
         }
-        saveRegisters();
+    }
+
+
+    private void bmg(int op) {
+        switch (op)
+        {
+            case 0: { // in rectangle
+                int h = pop();
+                int w = pop();
+                int y = pop();
+                int x = pop();
+                push(inrect(x, y, w, h));
+                break;
+            }
+
+            case 1: { // vertical line
+                int len = pop();
+                int y = pop();
+                int x = pop();
+                //Bitmap* bmp = (Bitmap*)(byte*)&mem[pop()];
+                int mode = pop();
+                //vline(mode, bmp, x, y, len);
+                break;
+            }
+
+            case 2: { // bitblit
+                int nobits = pop();
+                int sofs   = pop();
+                int sou    = pop();
+                int dofs   = pop();
+                int dst    = pop();
+                int mode = pop();
+                //gbblt(mode, dst, dofs, sou, sofs, nobits);
+                break;
+            }
+
+            case 3: { // display character
+                int ch  = pop();
+                //Font* font = (Font*)(byte*)&mem[pop()];
+                int y = pop();
+                int x = pop();
+                //Bitmap* bmp = (Bitmap*)(byte*)&mem[pop()];
+                int mode = pop();
+                //dch(mode, bmp, x, y, font, ch);
+                break;
+            }
+
+            case 4: { // clip
+                int h = pop();
+                int w = pop();
+                //Clip* clp = (Clip*)(byte*)&mem[pop()];
+                //push(clip(clp, w, h));
+                break;
+            }
+
+
+            case 5: { // line
+                int y1 = pop();
+                int x1 = pop();
+                int y = pop();
+                int x = pop();
+                //Bitmap* bmp = (Bitmap*)(byte*)&mem[pop()];
+                int mode = pop();
+                //line(mode, bmp, x, y, x1, y1);
+                break;
+            }
+
+            case 6: { // circle
+                int y = pop();
+                int x = pop();
+                //Circle* ctx = (Circle*)(byte*)&mem[pop()];
+                //Bitmap* bmp = (Bitmap*)(byte*)&mem[pop()];
+                int mode = pop();
+                //circle(mode, bmp, ctx, x, y);
+                break;
+            }
+
+            case 7: { // arc
+                //ArcCtx* ctx = (ArcCtx*)(byte*)&mem[pop()];
+                //Bitmap* bmp = (Bitmap*)(byte*)&mem[pop()];
+                int mode = pop();
+                //arc(mode, bmp, ctx);
+                break;
+            }
+
+
+            case 8: { // filled triangle
+                //TriangleFilled* ctx = (TriangleFilled*)(byte*)&mem[pop()];
+                //trif(ctx);
+                break;
+            }
+            case 9: { // filled circle
+                //CircleFilled* ctx = (CircleFilled*)(byte*)&mem[pop()];
+                //circlef(ctx);
+                break;
+            }
+            default:
+                pc--; ipt = 7;
+        }
+    }
+
+    private int inrect(int x, int y, int w, int h) {
+        // x <= w and y <= h is not a bug. This is how ucode was written!
+        // BMG.m takes this into account
+//  trace("inrect(%d, %d, %d, %d)=%d\n", x, y, w, h, x >= 0 && x <= w && y >= 0 && y <= h);
+        return x >= 0 && x <= w && y >= 0 && y <= h ? 1 : 0;
     }
 
     private void bitblt(int b, int a, int j, int i, int sz) {
@@ -1164,38 +1302,38 @@ public class VirtualMachine {
         {
             case 0: // SHRQ ??? (not tested) probably used by Portable C Compiler only
                 if (sp <= 1)
-                    Ipt = 0x4C;
+                    ipt = 0x4C;
                 else
                 {
-                    sp--; AStack[sp-1] = dword(AStack[sp-1]) >> dword(AStack[sp]);
+                    sp--; astack[sp-1] = (int) ( (long)astack[sp-1] >> (long) astack[sp]) ;
                 }
                 break;
             case 1: // QUOT
                 if (sp <= 1)
-                    Ipt = 0x4C;
+                    ipt = 0x4C;
                 else
                 {
-                    sp--; AStack[sp-1] /= AStack[sp];
+                    sp--; astack[sp-1] /= astack[sp];
                 }
                 break;
             case 2: // ANDQ ??? (not tested) probably used by Portable C Compiler only
                 if (sp <= 1)
-                    Ipt = 0x4C;
+                    ipt = 0x4C;
                 else
                 {
-                    sp--; AStack[sp-1] &= ((1 << AStack[sp]) - 1);
+                    sp--; astack[sp-1] &= ((1 << astack[sp]) - 1);
                 }
                 break;
             case 3: // REM
                 if (sp <= 1)
-                    Ipt = 0x4C;
+                    ipt = 0x4C;
                 else
                 {
-                    sp--; AStack[sp-1] %= AStack[sp];
+                    sp--; astack[sp-1] %= astack[sp];
                 }
                 break;
             default:
-                Ipt = 7;
+                ipt = 7;
                 pc -= 2;
                 break;
         }
@@ -1213,18 +1351,28 @@ public class VirtualMachine {
         l = i;
     }
 
-    private int getCode(int f) {
+    private VirtualMemory.VirtualMemoryPointer getCode(int f) {
         if (f < 0 || f > memory.getSize())
             ipt = 3;
-        return mem(f % memory.getSize()); //TODO byte*
+        return pmem(f % memory.getSize()); //TODO byte*
     }
 
     private void saveStack() {
-        throw new NotImplementedException();
+        int i = s;
+        while (sp != 0) mem(s++, pop());
+        mem(s,  s - i);
+        s++;
     }
 
     private void restoreStack() {
-        throw new NotImplementedException();
+        int i = mem(--s);
+        if (i > AStackSize)
+        {
+            ipt = 0x4C;
+            i = AStackSize;
+        }
+        while (i-- > 0)
+            push(mem(--s));
     }
 
     private int imod(int x, int y) {
@@ -1241,11 +1389,11 @@ public class VirtualMachine {
     }
 
     private void mmem(int idx, int length, byte[] block) {
-        
+        throw new NotImplementedException();
     }
 
     private byte[] mmem(int idx, int length) {
-        return null;
+        throw new NotImplementedException();
     }
 
     private void io(int no) {
@@ -1307,7 +1455,7 @@ public class VirtualMachine {
     }
 
     private void transfer(int p_to, int p_from) {
-
+        throw new NotImplementedException();
     }
 
     private int pop() {
@@ -1340,23 +1488,78 @@ public class VirtualMachine {
             ipt = 0x4C;
     }
 
-    private byte mem(int idx) {
-        return 0;
+    private int mem(int idx) {
+        return memory.getPointer(idx).getValue();
     }
 
     private void mem(int idx, int val) {
-
+        memory.getPointer(idx).setValue(val);
     }
 
-    private byte code(int idx) {
-        return 0;
+    private int code(int idx) {
+        return pcode.getValue(idx);
     }
 
-    private void trap(int ipt) {
+    private void trap(int no) {
+        //  trace("Trap %02.2X\n", no);
+        //  xxx: (only for debuging emulator itself.
+        if (no == 7)
+            bDebug = true;
 
+        if (no >= 0x3F)
+        {
+            mem(p + 6,  no);
+            no = 0x3F;
+        }
+        if (no == 0)
+        {
+            trap(6);
+            return;
+        }
+        if (no >= 0xC && no < 0x3F && (m & 0x1) == 0)
+            return;
+        if (no >= 2 && no < 0xC)
+        {
+            mem(p + 6, no);
+            if ((m & (1 << no)) == 0) //TODO replace 1U
+            {
+                if (no != 3) // booter use Ipt 3 to determine memory size
+                {
+                    log.error("Unexpected interrupt %02x.\n", no);
+                    bDebug = true;
+                }
+                return;
+            }
+        }
+        if (no == 1  && (m & 0x2) == 0)
+            return;
+        if (no == 0x3F && (m & (1 << 31)) == 0) //TODO replace 1U
+        return;
+        transfer(no*2, mem(no * 2 + 1));
     }
 
     private void restoreRegisters() {
-
+        mem(0, p);
+        g = mem(p);
+        f = mem(g);
+        pcode = getCode(f);
+        l  = mem(p+1);
+        pc = mem(p+2);
+        m  = mem(p+3);
+        s  = mem(p+4);
+        h  = mem(p+5);
+        h -= AStackSize + 1;
+        restoreStack();
     }
+
+    private void saveRegisters() {
+        mem(1, p);
+        saveStack();
+        mem(p + 0, g);
+        mem(p + 1, l);
+        mem(p + 2, pc);
+        mem(p + 3, m);
+        mem(p + 4, s);
+    }
+
 }

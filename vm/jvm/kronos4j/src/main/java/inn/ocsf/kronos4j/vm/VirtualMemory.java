@@ -1,5 +1,8 @@
 package inn.ocsf.kronos4j.vm;
 
+import org.apache.commons.io.EndianUtils;
+import org.apache.commons.lang3.Conversion;
+
 import java.util.Arrays;
 
 public class VirtualMemory {
@@ -9,13 +12,16 @@ public class VirtualMemory {
     private final int IGD480size   = 512 * 512 / 8;
 
     private byte[] data;
+    private int memorySizeBytes;
     private int memorySize;
     private boolean outOfRange;
 
-    public VirtualMemory(int memorySize) {
-        this.memorySize = memorySize;
-        data = new byte[memorySize];
+    public VirtualMemory(int memorySizeBytes) {
+        this.memorySizeBytes = memorySizeBytes;
+        this.memorySize = (memorySizeBytes + 3) / 4;
+        data = new byte[memorySizeBytes];
         Arrays.fill(data, (byte)0);
+        outOfRange = false;
     }
 
     public void store(int offset, int length, byte[] block) {
@@ -47,11 +53,16 @@ public class VirtualMemory {
         return pointer;
     }
 
+    /*
+    * addressing words (32-bit)
+     */
     public static class VirtualMemoryPointer {
 
         private VirtualMemory memory;
 
         private Integer address;
+
+        private byte[] area = new byte[4];
 
         private VirtualMemoryPointer(){
 
@@ -63,20 +74,19 @@ public class VirtualMemory {
             if (address + idx >= memory.memorySize) {
                 memory.outOfRange = true; //TODO нужно ли это???
             }
-
-            return memory.data[address + idx];
+            System.arraycopy(memory.data, 4 * (address + idx), area, 0, 4);
+            int value = Conversion.byteArrayToInt(memory.data, 4 * (address + idx), 0, 0, 4);
+            return value;
         }
 
         public int getValue() {
-            if (address == null)
-                return 0;
-            return memory.data[address];
+            return getValue(0);
         }
 
         public void setValue(int value) {
             if (address == null)
                 return;
-            memory.data[address] = (byte) value;
+            Conversion.intToByteArray(value, 0, memory.data, 4 * address, 4);
         }
     }
 }

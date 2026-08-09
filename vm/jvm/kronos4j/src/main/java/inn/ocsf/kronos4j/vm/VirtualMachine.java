@@ -1,5 +1,7 @@
 package inn.ocsf.kronos4j.vm;
 
+import org.apache.commons.io.EndianUtils;
+import org.apache.commons.lang3.Conversion;
 import org.apache.commons.lang3.NotImplementedException;
 import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
@@ -65,7 +67,7 @@ public class VirtualMachine {
     }
 
     public void run() throws InterruptedException {
-        //int a = 0;
+        int d = 0;
         bDebug = false;
         ipt = 0;
         sp = 0;
@@ -101,6 +103,10 @@ public class VirtualMachine {
             if (ipt != 0) {
                 trap(ipt);
                 ipt = 0;
+            }
+            if (bDebug) {
+                if (!debugMonitor(d))
+                    break;
             }
             pcs = pc;
             ir = code(pc++);
@@ -1141,14 +1147,18 @@ public class VirtualMachine {
                     ipt = 0x7;
                     break;
             }
+
             if (ipt == 0 && s > h || s == 0)
             {
                 throw new RuntimeException();
             }
-            saveRegisters();
         }
+        //saveRegisters(); unreachable, after break or smth?
     }
 
+    private boolean debugMonitor(int a) {
+        return true;
+    }
 
     private void bmg(int op) {
         switch (op)
@@ -1455,7 +1465,11 @@ public class VirtualMachine {
     }
 
     private void transfer(int p_to, int p_from) {
-        throw new NotImplementedException();
+        int i = mem(p_to);
+        mem(p_from, p);
+        saveRegisters();
+        p = i;
+        restoreRegisters();
     }
 
     private int pop() {
@@ -1465,18 +1479,27 @@ public class VirtualMachine {
         return 0;
     }
 
+    /*
+     * int of four byte
+     */
     private int next4() {
         int pc = this.pc;
         this.pc += 4;
-        return code(pc);
+        return code(pc, 4);
     }
 
+    /*
+     * int of two byte
+     */
     private int next2() {
         int pc = this.pc;
         this.pc += 2;
-        return (short) code(pc);
+        return code(pc, 2);
     }
 
+    /*
+    * int of one byte
+     */
     private int next() {
         return code(pc++);
     }
@@ -1496,8 +1519,17 @@ public class VirtualMachine {
         memory.getPointer(idx).setValue(val);
     }
 
-    private int code(int idx) {
-        return pcode.getValue(idx);
+    private int code (int idx) {
+        return code(idx, 1);
+    }
+
+    private int code(int idx, int n) {
+        byte[] word = new byte[4];
+        int offset = idx / 4;
+        int cidx = idx % 4;
+        int code = pcode.getValue(offset); // little endian
+        Conversion.intToByteArray(code, 0, word, 0, 4);
+        return Conversion.byteArrayToInt(word, cidx, 0, 0, n);
     }
 
     private void trap(int no) {
@@ -1525,7 +1557,7 @@ public class VirtualMachine {
             {
                 if (no != 3) // booter use Ipt 3 to determine memory size
                 {
-                    log.error("Unexpected interrupt %02x.\n", no);
+                    //log.error("Unexpected interrupt {}.\n", no);
                     bDebug = true;
                 }
                 return;
@@ -1534,7 +1566,7 @@ public class VirtualMachine {
         if (no == 1  && (m & 0x2) == 0)
             return;
         if (no == 0x3F && (m & (1 << 31)) == 0) //TODO replace 1U
-        return;
+            return;
         transfer(no*2, mem(no * 2 + 1));
     }
 
@@ -1555,11 +1587,18 @@ public class VirtualMachine {
     private void saveRegisters() {
         mem(1, p);
         saveStack();
-        mem(p + 0, g);
+        mem(p, g);
         mem(p + 1, l);
         mem(p + 2, pc);
         mem(p + 3, m);
         mem(p + 4, s);
     }
 
+    public void runSafe() {
+        try {
+            run();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
 }

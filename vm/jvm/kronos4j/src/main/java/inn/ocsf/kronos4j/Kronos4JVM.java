@@ -39,7 +39,7 @@ public class Kronos4JVM {
         if (vm.getDiskCount() > 1) {
             readBooter(vm, 1);
         }
-        vm.run();
+        vm.runSafe();
     }
 
     private static void readBooter(VirtualMachine vm, int diskIndex) {

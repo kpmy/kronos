@@ -23,23 +23,23 @@ public class VirtualMachine {
     private List<VirtualDisk> disks = new ArrayList<>();
 
     private int
-            ipt,
-            sp,
-            pc,
-            pcs,
-            ir,
-            p,
-            l,
-            g,
-            m,
-            h,
-            s,
-            f;
+            ipt, //код прерывания
+            sp, //указатель на стек выражений (верхний элемент)
+            pc, //указатель на инструкцию
+            pcs, //указатель на предыдущую инструкцию
+            ir, //инструкция
+            p, //память процесса
+            l, //область локальных данных текущей процедуры на стеке
+            g, //область глобальных данных модуля
+            m, //маска прерываний
+            h, //конец процедурного стека
+            s, //указатель на процедурный стек (верхний элемент)
+            f; //указатель на начало сегмента кода текущей процедуры
     private boolean bDebug = false;
 
     private VirtualMemory.VirtualMemoryPointer pcode;
 
-    private int[] astack = new int[AStackSize];
+    private Integer[] astack = new Integer[AStackSize];
 
     public VirtualMachine(int memorySize) {
         memory = new VirtualMemory(memorySize);
@@ -66,48 +66,55 @@ public class VirtualMachine {
         return memory;
     }
 
-    public void run() throws InterruptedException {
+    private boolean irq() {
         int d = 0;
+        boolean bTimer = false;
+
+        if (ipt == 0) {
+            if (memory.isOutOfRange())
+                ipt = 3;
+            else if (bTimer)
+            {
+                if ((m & 0x2) != 0)
+                {
+                    bTimer = false;
+                    ipt = 1; // timer ipt
+                }
+            }
+            else if ((m & 0x1) != 0)
+            {
+                //SIO *s = sios.inpReady();
+
+                // if (s != NULL)
+                //     Ipt = s->ipt();
+                // else
+                // {
+                //     s = sios.outReady();
+                //     if (s != NULL)
+                //         Ipt = s->ipt() + 1;
+                // }
+            }
+        }
+        if (ipt != 0) {
+            trap(ipt);
+            ipt = 0;
+        }
+        if (bDebug) {
+            if (!debugMonitor(d))
+                return false;
+        }
+        return true;
+    }
+
+    public void run() throws InterruptedException {
         bDebug = false;
         ipt = 0;
         sp = 0;
         p = mem(1);
-        boolean bTimer = false;
         restoreRegisters();
         for (;;) {
-            if (ipt == 0) {
-                if (memory.isOutOfRange())
-                    ipt = 3;
-                else if (bTimer)
-                {
-                    if ((m & 0x2) != 0)
-                    {
-                        bTimer = false;
-                        ipt = 1; // timer ipt
-                    }
-                }
-                else if ((m & 0x1) != 0)
-                {
-                    //SIO *s = sios.inpReady();
-
-                   // if (s != NULL)
-                   //     Ipt = s->ipt();
-                   // else
-                   // {
-                   //     s = sios.outReady();
-                   //     if (s != NULL)
-                   //         Ipt = s->ipt() + 1;
-                   // }
-                }
-            }
-            if (ipt != 0) {
-                trap(ipt);
-                ipt = 0;
-            }
-            if (bDebug) {
-                if (!debugMonitor(d))
-                    break;
-            }
+            if (!irq())
+                break;
             pcs = pc;
             ir = code(pc++);
 
@@ -220,7 +227,7 @@ public class VirtualMachine {
                 case 0x80: // I/O bus reset
                     break;
                 case 0x81: // QUIT Stop processor
-                    bDebug = true;
+                    bDebug = true; //do nothing
                     break;
                     case 0x82: // GETM Get Mask
                     push(m);
@@ -229,7 +236,8 @@ public class VirtualMachine {
                     m = pop();
                     break;
                 case 0x84: // TRAP interrupt simulation
-                    ipt = pop();
+                    //ipt = pop();
+                    ipt = astack[sp-1];
                     break;
                 case 0x85: // TRA  Transfer control between processes
                 {
@@ -424,7 +432,7 @@ public class VirtualMachine {
                     else
                     {
                         sp--;
-                        astack[sp-1] = astack[sp-1] == astack[sp] ? 1 : 0;
+                        astack[sp-1] = (int) astack[sp-1] == astack[sp] ? 1 : 0;
                     }
                     break;
 
@@ -433,7 +441,7 @@ public class VirtualMachine {
                         ipt = 0x4C;
                     else
                     {
-                        sp--; astack[sp-1] = astack[sp-1] != astack[sp] ? 1 : 0;
+                        sp--; astack[sp-1] = (int) astack[sp-1] != astack[sp] ? 1 : 0;
                     }
                     break;
 
@@ -456,7 +464,7 @@ public class VirtualMachine {
                 case 0xAC:  // IN   membership to bitset 
                 {   int i = pop();
                     int j = pop();
-                    push(j >= 0 && j < 32 ? (((1 << j) & i) != 0 ? 1 : 0) : 0); //TODO replace 1U
+                    push(j >= 0 && j < 32 ? (((1L << j) & i) != 0 ? 1 : 0) : 0); //TODO replace 1U
                     break;
                 }
                 case 0xAD:  // BIT  setBIT 
@@ -465,7 +473,7 @@ public class VirtualMachine {
                     if (i < 0 || i >= 32)
                         ipt = 0x4A;
                     else
-                        push(1 << i); //TODO replace 1U
+                        push((int) (1L << i)); //TODO replace 1U
                     break;
                 }
                 case 0xAE:  // NOT  boolean NOT (not bit per bit!) 
@@ -775,7 +783,7 @@ public class VirtualMachine {
                     l = mem(s + 1);
                     int i = mem(s + 2);
                     pc = i & 0xFFFF;
-                    if (((1 << ExternalBit) & i) == 1) //TODO replace 1U
+                    if (((1L << ExternalBit) & Integer.toUnsignedLong(i)) != 0)
                     {
                         g = mem(s);
                         f = mem(g);
@@ -823,7 +831,7 @@ public class VirtualMachine {
                         s--;
                         int i = mem(s);
                         mark(g, true);
-                        int j = i;//((byte*)&i)[3]; //TODO byte*
+                        int j = (i >> 24) & 0xFF;
                         i = i & 0xFFFFFF; // *{0..23};
                         g = mem(i);
                         f = mem(g);
@@ -1152,8 +1160,15 @@ public class VirtualMachine {
             {
                 throw new RuntimeException();
             }
+            clearStack();
         }
         //saveRegisters(); unreachable, after break or smth?
+    }
+
+    private void clearStack() {
+        for (int t = sp; t < AStackSize; t++){
+            astack[t] = null;
+        }
     }
 
     private boolean debugMonitor(int a) {
@@ -1354,7 +1369,7 @@ public class VirtualMachine {
         mem(s++, x);
         mem(s++, l);
         if (extern)
-            mem(s, pc | (1 << ExternalBit)); //TODO replace 1U
+            mem(s, (int) ((long) pc | (1L << ExternalBit))); //TODO replace 1U
         else
             mem(s, pc);
         s += 2;
@@ -1524,12 +1539,7 @@ public class VirtualMachine {
     }
 
     private int code(int idx, int n) {
-        byte[] word = new byte[4];
-        int offset = idx / 4;
-        int cidx = idx % 4;
-        int code = pcode.getValue(offset); // little endian
-        Conversion.intToByteArray(code, 0, word, 0, 4);
-        return Conversion.byteArrayToInt(word, cidx, 0, 0, n);
+        return pcode.getValueBytes(idx, n);
     }
 
     private void trap(int no) {
@@ -1553,7 +1563,7 @@ public class VirtualMachine {
         if (no >= 2 && no < 0xC)
         {
             mem(p + 6, no);
-            if ((m & (1 << no)) == 0) //TODO replace 1U
+            if ((m & (int) (1L << Integer.toUnsignedLong(no))) == 0) //TODO replace 1U
             {
                 if (no != 3) // booter use Ipt 3 to determine memory size
                 {
@@ -1565,7 +1575,7 @@ public class VirtualMachine {
         }
         if (no == 1  && (m & 0x2) == 0)
             return;
-        if (no == 0x3F && (m & (1 << 31)) == 0) //TODO replace 1U
+        if (no == 0x3F && (m & (int) (1L << 31)) == 0) //TODO replace 1U
             return;
         transfer(no*2, mem(no * 2 + 1));
     }

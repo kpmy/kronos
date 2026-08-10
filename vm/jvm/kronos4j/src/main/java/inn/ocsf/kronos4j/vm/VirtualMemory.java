@@ -1,6 +1,5 @@
 package inn.ocsf.kronos4j.vm;
 
-import org.apache.commons.io.EndianUtils;
 import org.apache.commons.lang3.Conversion;
 
 import java.util.Arrays;
@@ -50,6 +49,7 @@ public class VirtualMemory {
             pointer.address = null;
             outOfRange = true;
         }
+        pointer.getValue();
         return pointer;
     }
 
@@ -62,20 +62,30 @@ public class VirtualMemory {
 
         private Integer address;
 
-        private byte[] area = new byte[4];
+        private Integer _offset;
+
+        private Integer _byte_offset;
+
+        private Integer _byte_count;
+
+        private byte[] _area = new byte[4];
 
         private VirtualMemoryPointer(){
 
         }
 
-        public int getValue(int idx) {
-            if (address == null)
+        public int getValue(int offset) {
+            if (address == null) {
+                _offset = null;
+                _area = new byte[4];
                 return 0;
-            if (address + idx >= memory.memorySize) {
+            }
+            if (address + offset >= memory.memorySize) {
                 memory.outOfRange = true; //TODO нужно ли это???
             }
-            System.arraycopy(memory.data, 4 * (address + idx), area, 0, 4);
-            int value = Conversion.byteArrayToInt(memory.data, 4 * (address + idx), 0, 0, 4);
+            _offset = offset;
+            System.arraycopy(memory.data, 4 * (address + offset), _area, 0, 4);
+            int value = Conversion.byteArrayToInt(memory.data, 4 * (address + offset), 0, 0, 4);
             return value;
         }
 
@@ -87,6 +97,25 @@ public class VirtualMemory {
             if (address == null)
                 return;
             Conversion.intToByteArray(value, 0, memory.data, 4 * address, 4);
+        }
+
+        public int getValueBytes(int byteOffset, int nOfBytes) {
+            byte[] word = new byte[4];
+            int offset = byteOffset / 4;
+            int cidx = byteOffset % 4;
+            int value0 = getValue(offset);
+            int value1;
+            Conversion.intToByteArray(value0, 0, word, 0, 4);
+            if (cidx + nOfBytes >= word.length) {
+                value1 = getValue(offset + 1);
+                byte[] longword = new byte[8];
+                System.arraycopy(word, 0, longword, 0, word.length);
+                Conversion.intToByteArray(value1, 0, longword, 4, 4);
+                word = longword;
+            }
+            _byte_offset = cidx;
+            _byte_count = nOfBytes;
+            return Conversion.byteArrayToInt(word, cidx, 0, 0, nOfBytes);
         }
     }
 }

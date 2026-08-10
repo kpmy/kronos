@@ -37,7 +37,7 @@ public class Kronos4JVM {
         Configuration config = builder.getConfiguration();
         addDisks(vm, config);
         if (vm.getDiskCount() > 1) {
-            readBooter(vm, 1);
+            readBooter(vm, 0);
         }
         vm.runSafe();
     }

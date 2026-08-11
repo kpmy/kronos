@@ -9,6 +9,9 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class VirtualMachine {
 
@@ -38,6 +41,7 @@ public class VirtualMachine {
             s, //указатель на процедурный стек (верхний элемент)
             f; //указатель на начало сегмента кода текущей процедуры
     private boolean bDebug = false;
+    private boolean bTimer = false;
 
     private VirtualMemory.VirtualMemoryPointer pcode;
 
@@ -47,6 +51,14 @@ public class VirtualMachine {
         memory = new VirtualMemory(memorySize);
         pcode = pmem(0);
         console = new VirtualConsole(0xFB8, 0x0C);
+        startTimer();
+    }
+
+    private void startTimer() {
+        ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.scheduleAtFixedRate(() -> {
+            bTimer = true;
+        }, 0, 100, TimeUnit.MILLISECONDS);
     }
 
     private VirtualMemory.VirtualMemoryPointer pmem(int addr) {
@@ -71,7 +83,6 @@ public class VirtualMachine {
 
     private boolean irq() {
         int d = 0;
-        boolean bTimer = false;
 
         if (ipt == 0) {
             if (memory.isOutOfRange())

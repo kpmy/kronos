@@ -22,6 +22,8 @@ public class VirtualMachine {
 
     private List<VirtualDisk> disks = new ArrayList<>();
 
+    private VirtualConsole console;
+
     private int
             ipt, //код прерывания
             sp, //указатель на стек выражений (верхний элемент)
@@ -44,6 +46,7 @@ public class VirtualMachine {
     public VirtualMachine(int memorySize) {
         memory = new VirtualMemory(memorySize);
         pcode = pmem(0);
+        console = new VirtualConsole(0xFB8, 0x0C);
     }
 
     private VirtualMemory.VirtualMemoryPointer pmem(int addr) {
@@ -210,10 +213,16 @@ public class VirtualMachine {
                     int i = pop();
                     int j = pop();
                     int s = mem(j + i / 4);
-                    //((byte*)&s)[i % 4] = (byte)k; //TODO разобраться с reference
+                    //((byte*)&s)[i % 4] = (byte)k; //rewrite
+                    int pos = i % 4;                 // byte index: 0 = LSB, 3 = MSB
+                    //int mask = 0xFF << (pos * 8);    // mask for the target byte
+                    //s = (s & ~mask) | ((k & 0xFF) << (pos * 8));
+                    byte[] sa = new byte[4];
+                    Conversion.intToByteArray(s, 0, sa, 0, 4);
+                    sa[pos] = (byte) k;
+                    s = Conversion.byteArrayToInt(sa, 0, 0, 0, 4);
                     mem(j + i / 4, s);
-                    throw new NotImplementedException();
-                    //break;
+                    break;
                 }
 
                 case 0x51:  { int i = pop(); mem(pop() + pop(),  i); break; }
@@ -1440,7 +1449,126 @@ public class VirtualMachine {
     }
 
     private void io(int no) {
-        throw new NotImplementedException();
+        switch (no) {
+            case 0x0: { //input
+                int adr = pop();
+                int ioAddr = adr & 0xFFC;
+                if (ioAddr == console.getAddress()) { // console ipt 0x0C
+                    push(console.inp(adr));
+                } else {
+                    Integer inp = 0; //TODO
+                    if (inp != null) {
+                        push(0);
+                    } else {
+                        ipt = 3;
+                        push(0);
+                    }
+                    throw new NotImplementedException();
+                }
+                break;
+            }
+            case 0x1: { //output
+                int i = pop();
+                int adr = pop();
+                int ioAddr = adr & 0xFFC;
+                if (ioAddr == console.getAddress()) {
+                    console.out(adr, i);
+                } else {
+                    throw new NotImplementedException("out");
+                }
+                break;
+            }
+            case 0x2: { //disk io
+                int len = pop();    // bytes
+                int adr = pop();    // address
+                int sec = pop();    // sector
+                int dsk = pop();    // disk
+                int op = pop();    // operation
+                push(doDiskOperation(op, dsk, sec, adr, len));
+                break;
+            }
+            default:
+                //trace("unsupported i/o function %03X\n", no);
+                //Ipt = 7;  PC -= 2;
+                //break;
+                throw new NotImplementedException(String.format("unknown io channel %x", no));
+            }
+    }
+
+    private int doDiskOperation(int op, int dsk, int sec, int adr, int len) {
+        switch (op)
+        {
+            case 1:
+                if (dsk >= 0 && dsk < disks.size()) {
+                    if (disks.get(dsk).isMounted()){
+                        //do nothing
+                    }
+                    disks.get(dsk).setMounted(true);
+                    return 1;
+                }
+                return 0;
+            case 2:
+                if (dsk >= 0 && dsk < disks.size()) {
+                    if (!disks.get(dsk).isMounted()){
+                        //do nothing
+                    }
+                    disks.get(dsk).setMounted(false);
+                    return 1;
+                }
+                return 0;
+            case 3:
+                if (dsk >= 0 && dsk < disks.size()) {
+                    var ret = pmem(adr);
+                    ret.setValue(disks.get(dsk).getSize4Kb());
+                    return 1;
+                }
+                return 0;
+            case 4:
+                if (dsk >= 0 && dsk < disks.size()) {
+                    var ret = pmem(adr);
+                    byte[] data = disks.get(dsk).read(sec * 512, len);
+                    ret.setValues(data);
+                    return 1;
+                }
+                return 0;
+            case 5:
+                if (dsk >= 0 && dsk < disks.size()) {
+                    //return Disks.Write(dsk, sec, &mem[adr], len);
+                }
+                throw new NotImplementedException();
+                //return 0;
+            case 6:
+            {
+                //SYSTEMTIME st;
+                //GetLocalTime(&st);
+                //mem[adr++] = st.wYear;
+                //mem[adr++] = st.wMonth;
+                //mem[adr++] = st.wDay;
+                //mem[adr++] = st.wHour;
+                //mem[adr++] = st.wMinute;
+                //mem[adr++] = st.wSecond;
+            }
+            throw new NotImplementedException();
+            //return 0;
+            case 8: // getspecs
+                if (dsk >= 0 && dsk < disks.size()) {
+
+                }
+                throw new NotImplementedException();
+                //return 0;
+                //return Disks.GetSpecs(dsk, (Request*)(byte*)&mem[adr]);
+            case 9: // setspecs
+                if (dsk >= 0 && dsk < disks.size()) {
+
+                }
+                throw new NotImplementedException();
+                //return 0;
+                //return Disks.SetSpecs(dsk, (Request*)(byte*)&mem[adr]);
+            default:
+                //trace("invalid disk operation: %d\n", op);
+                //throw new NotImplementedException();
+                return 0;
+        }
     }
 
     long qabs(long x) { return x >= 0 ? x : -x; }

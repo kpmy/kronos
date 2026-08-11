@@ -117,5 +117,9 @@ public class VirtualMemory {
             _byte_count = nOfBytes;
             return Conversion.byteArrayToInt(word, cidx, 0, 0, nOfBytes);
         }
+
+        public void setValues(byte[] data) {
+            System.arraycopy(data, 0, memory.data, address, data.length);
+        }
     }
 }

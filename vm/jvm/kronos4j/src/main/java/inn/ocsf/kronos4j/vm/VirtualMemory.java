@@ -106,7 +106,7 @@ public class VirtualMemory {
             int value0 = getValue(offset);
             int value1;
             Conversion.intToByteArray(value0, 0, word, 0, 4);
-            if (cidx + nOfBytes >= word.length) {
+            if (cidx + nOfBytes > word.length) {
                 value1 = getValue(offset + 1);
                 byte[] longword = new byte[8];
                 System.arraycopy(word, 0, longword, 0, word.length);

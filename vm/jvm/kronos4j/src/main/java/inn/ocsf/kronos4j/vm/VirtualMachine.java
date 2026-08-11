@@ -132,22 +132,38 @@ public class VirtualMachine {
                 case 0x15:  push(g+next()); break;
                 case 0x16:  astack[sp-1] += next(); break;
                 case 0x17:  push(mem(mem(g - next() - 1)) + next());    break;
-                case 0x18:  if (pop() == 0) pc += next2();
-                else            pc += 2;
+                case 0x18:  if (pop() == 0) {
+                    int pc1 = next2();
+                    pc += pc1;
+                } else            pc += 2;
                     break;
-                case 0x19:  pc += next2();  break;
-                case 0x1A:  if (pop() == 0) pc += next();
-                else            pc++;
+                case 0x19: {
+                    int pc1 = next2();
+                    pc += pc1;  break;}
+                case 0x1A:  if (pop() == 0) {
+                    int pc1 = next();
+                    pc += pc1;
+                } else            pc++;
                     break;
-                case 0x1B:  pc += next();   break;
-                case 0x1C:  if (pop() == 0) pc -= next2();
-                else            pc += 2;
+                case 0x1B: {
+                    int pc1 = next();
+                    pc += pc1;   break; }
+                case 0x1C:  if (pop() == 0) {
+                    int pc1 = next2();
+                    pc -= pc1;
+                } else            pc += 2;
                     break;
-                case 0x1D:  pc -= next2();  break;
-                case 0x1E:  if (pop() == 0) pc -= next();
-                else            pc++;
+                case 0x1D: {
+                    int pc1 = next2();
+                    pc -= pc1;  break; }
+                case 0x1E:  if (pop() == 0) {
+                    int pc1 = next();
+                    pc -= pc1;
+                } else            pc++;
                     break;
-                case 0x1F:  pc -= next();   break;
+                case 0x1F: {
+                    int pc1 = next();
+                    pc -= pc1;   break; }
 
                 case 0x20:  push(mem(l + next()));  break;
                 case 0x21:  push(mem(g + next()));  break;
@@ -624,14 +640,16 @@ public class VirtualMachine {
                     }
                     else
                     {
-                        pc += next2();
+                        int pc1 = next2();
+                        pc += pc1;
                         int j = pop();
                         int low = next2();
                         int hi = next2();
                         int i = pc + 2 * (hi - low) + 4;
                         mem(s++, i);
                         if (j >= low && j <= hi) pc += (j-low+1)*2;
-                        pc -= next2();
+                        int pc2 = next2();
+                        pc -= pc2;
                     }
                     break;
                 }

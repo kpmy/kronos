@@ -252,8 +252,8 @@ public class VirtualMachine {
                     m = pop();
                     break;
                 case 0x84: // TRAP interrupt simulation
-                    //ipt = pop();
-                    ipt = astack[sp-1];
+                    ipt = pop();
+                    //ipt = astack[sp-1];
                     break;
                 case 0x85: // TRA  Transfer control between processes
                 {

@@ -194,7 +194,7 @@ public class VirtualMachine {
                 case 0x40:  {   int i = pop();
                     int j = pop();
                     VirtualMemory.VirtualMemoryPointer s = pmem(j + i / 4);
-                    push((byte) s.getValue(i % 4));
+                    push((byte) s.getValueBytes(i % 4, 1));
                     break;
                 }
 
@@ -1528,7 +1528,7 @@ public class VirtualMachine {
                     var ret = pmem(adr);
                     byte[] data = disks.get(dsk).read(sec * 512, len);
                     ret.setValues(data);
-                    return 1;
+                    return data.length == len ? 1 : 0;
                 }
                 return 0;
             case 5:

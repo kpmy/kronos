@@ -119,7 +119,7 @@ public class VirtualMemory {
         }
 
         public void setValues(byte[] data) {
-            System.arraycopy(data, 0, memory.data, address, data.length);
+            System.arraycopy(data, 0, memory.data, address * 4, data.length);
         }
     }
 }

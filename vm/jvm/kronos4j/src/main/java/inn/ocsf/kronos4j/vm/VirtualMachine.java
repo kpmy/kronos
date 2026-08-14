@@ -1,5 +1,7 @@
 package inn.ocsf.kronos4j.vm;
 
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVRecord;
 import org.apache.commons.io.EndianUtils;
 import org.apache.commons.lang3.Conversion;
 import org.apache.commons.lang3.NotImplementedException;
@@ -7,13 +9,93 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public class VirtualMachine {
+
+    public static final String M_CODE_TABLE = """
+            --   00     20      40      60      80     A0     C0     E0
+            
+            00   LI0    LLW     LXB     LSW0           LSS    MOVE   INCL
+            01   LI1    LGW     LXW     LSW1    QUIT   LEQ  **CHKNIL EXCL
+            02   LI2    LEW     LGW2    LSW2    GETM   GTR    LSTA  *INL
+            03   LI3    LSW     LGW3    LSW3    SETM   GEQ    COMP  *QUOT
+            04   LI4    LLW4    LGW4    LSW4    TRAP   EQU    GB     INC1
+            05   LI5    LLW5    LGW5    LSW5    TRA    NEQ    GB1    DEC1
+            06   LI6    LLW6    LGW6    LSW6    TR     ABS    CHK    INC
+            07   LI7    LLW7    LGW7    LSW7    IDLE   NEG    CHKZ   DEC
+            
+            08   LI8    LLW8    LGW8    LSW8    ADD    OR     ALLOC  STOT
+            09   LI9    LLW9    LGW9    LSW9    SUB    AND    ENTR   LODT
+            0A   LI0A   LLW0A   LGW0A   LSW0A   MUL    XOR    RTN    LXA
+            0B   LI0B   LLW0B   LGW0B   LSW0B   DIV    BIC    NOP    LPC
+            0C   LI0C   LLW0C   LGW0C   LSW0C   SHL    IN     CX   **BBU
+            0D   LI0D   LLW0D   LGW0D   LSW0D   SHR    BIT    CI   **BBP
+            0E   LI0E   LLW0E   LGW0E   LSW0E   ROL    NOT    CF   **BBLT
+            0F   LI0F   LLW0F   LGW0F   LSW0F   ROR    MOD    CL   **PDX
+            
+            10   LIB    SLW     SXB     SSW0    IO0    DECS   CL0    SWAP
+            11   LID    SGW     SXW     SSW1    IO1    DROP   CL1    LPA
+            12   LIW    SEW     SGW2    SSW2    IO2    LODFV  CL2    LPW
+            13   LIN    SSW     SGW3    SSW3    IO3    STORE  CL3    SPW
+            14   LLA    SLW4    SGW4    SSW4    IO4    STOFV  CL4    SSWU
+            15   LGA    SLW5    SGW5    SSW5   *ARRCMP COPT   CL5  **RCHK
+            16   LSA    SLW6    SGW6    SSW6   *WM     CPCOP  CL6  **RCHZ
+            17   LEA    SLW7    SGW7    SSW7   *BM     PCOP   CL7  **CM
+            
+            18   JFLC   SLW8    SGW8    SSW8    FADD   *FOR1  CL8   *CHKBX
+            19   JFL    SLW9    SGW9    SSW9    FSUB   *FOR2  CL9   *BMG
+            1A   JFSC   SLW0A   SGW0A   SSW0A   FMUL   *ENTC  CL0A   ACTIV
+            1B   JFS    SLW0B   SGW0B   SSW0B   FDIV   *XIT   CL0B   USR
+            1C   JBLC   SLW0C   SGW0C   SSW0C   FCMP   ADDPC  CL0C   SYS
+            1D   JBL    SLW0D   SGW0D   SSW0D   FABS   JMP    CL0D **NII
+            1E   JBSC   SLW0E   SGW0E   SSW0E   FNEG   ORJP   CL0E   DOT
+            1F   JBS    SLW0F   SGW0F   SSW0F   FFCT   ANDJP  CL0F   INVLD
+            
+            """;
+    public static Map<Integer, String> MCODES = new HashMap<>();
+    static {
+        String table = M_CODE_TABLE.replace("\r\n", "\n");
+        while (table.contains("\n ")){
+            table = table.replace("\n ", "\n");
+        }
+        while (table.contains("  ")) {
+            table = table.replace("  ", " ");
+        }
+        table = table.replace(" ", "\t"); //now its TSV
+        try {
+            var records = CSVFormat.TDF.builder()
+                    .setHeader()
+                    .setSkipHeaderRecord(true)
+                    .build()
+                    .parse(new StringReader(table));
+            List<String> headers = records.getHeaderNames();
+            for (CSVRecord record : records) {
+                String ls = "0";
+                int li = 0;
+                for (int l = 0; l < record.size(); l++) {
+                    if(l > 0) {
+                        String hs = headers.get(l);
+                        int hi = Integer.parseInt(hs, 16);
+                        MCODES.put(hi + li, record.get(l));
+                    } else {
+                        ls = record.get(l);
+                        li = Integer.parseInt(ls, 16);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        };
+    }
 
     public static final int AStackSize = 15;
     public static final int Nil = 0x7FFFFF80;
@@ -45,10 +127,14 @@ public class VirtualMachine {
     private boolean bDebug = false;
     private boolean bTimer = false;
     private boolean sPause = false;
+    private long stepIdx = 0;
 
     private VirtualMemory.VirtualMemoryPointer pcode;
 
     private Integer[] astack = new Integer[AStackSize];
+
+    //debug
+    private final Map<Integer, Integer> irCountMap = new HashMap<>();
 
     public VirtualMachine(int memorySize) {
         memory = new VirtualMemory(memorySize);
@@ -134,9 +220,15 @@ public class VirtualMachine {
         boolean badIrq = false;
         while (!sPause && !badIrq) {
             badIrq = step();
+            dump();
+            stepIdx++;
         }
         stop();
         stopTimer();
+    }
+
+    private void dump() {
+
     }
 
     public boolean step() throws InterruptedException {
@@ -144,6 +236,14 @@ public class VirtualMachine {
             return true;
         pcs = pc;
         ir = code(pc++);
+
+        {
+            int irCount = irCountMap.getOrDefault(ir, 0);
+            if(irCount == 0) {
+                log.info("new IR 0x{} {}", String.format("%02X",  ir), MCODES.get(ir));
+            }
+            irCountMap.put(ir, irCount+1);
+        }
 
         switch (ir) {
             case 0x0: case 0x1: case 0x2: case 0x3:
@@ -513,7 +613,7 @@ public class VirtualMachine {
             case 0xAC:  // IN   membership to bitset
             {   int i = pop();
                 int j = pop();
-                push(j >= 0 && j < 32 ? (((1L << j) & i) != 0 ? 1 : 0) : 0); //TODO replace 1U
+                push(j >= 0 && j < 32 ? (((int) (1L << j) & i) != 0 ? 1 : 0) : 0);
                 break;
             }
             case 0xAD:  // BIT  setBIT
@@ -522,7 +622,7 @@ public class VirtualMachine {
                 if (i < 0 || i >= 32)
                     ipt = 0x4A;
                 else
-                    push((int) (1L << i)); //TODO replace 1U
+                    push((int) (1L << i));
                 break;
             }
             case 0xAE:  // NOT  boolean NOT (not bit per bit!)
@@ -923,7 +1023,7 @@ public class VirtualMachine {
                 int i = pop();
                 int j = pop() + (i >> 5);
                 i = i & 0x1F;
-                mem(j, mem(j) | (1 << i)); //TODO replace 1U
+                mem(j, mem(j) | ((int)(1L << i)));
                 break;
             }
 
@@ -932,7 +1032,7 @@ public class VirtualMachine {
                 int i = pop();
                 int j = pop() + (i >> 5);
                 i = i & 0x1F;
-                mem(j, mem(j) & ~(1 << i)); //TODO replace 1U
+                mem(j, mem(j) & ~((int) (1L << i)));
                 break;
             }
 
@@ -944,7 +1044,7 @@ public class VirtualMachine {
                 if (i < 0 || i >= k)
                     push(0);
                 else
-                    push( ((1 << (i & 0x1F)) & mem(j + (i >> 5))) != 0 ? 1 : 0); //TODO replace 1U
+                    push( ((int) (1L << (i & 0x1F)) & mem(j + (i >> 5))) != 0 ? 1 : 0);
                 break;
             }
 
@@ -1002,7 +1102,8 @@ public class VirtualMachine {
                 int i = next();
                 int j = next();
                 i = mem(g - i - 1);
-                //((byte*)&i)[3] = (byte)j; //TODO byte*
+                //((byte*)&i)[3] = (byte)j;
+                i = Conversion.byteArrayToInt(new byte[]{(byte) j}, 0, i, 3, 1);
                 push(i);
                 break;
             }
@@ -1018,7 +1119,7 @@ public class VirtualMachine {
                 }
                 int i = pop();
                 int adr = pop();
-                push(bbu(adr, i, sz));
+                push(memory.bbu(adr, i, sz));
                 break;
             }
 
@@ -1034,7 +1135,7 @@ public class VirtualMachine {
                 }
                 int i = pop();
                 int adr = pop();
-                bbp(adr, i, sz, j);
+                memory.bbp(adr, i, sz, j);
                 break;
             }
 
@@ -1225,6 +1326,7 @@ public class VirtualMachine {
         sp = 0;
         p = mem(1);
         restoreRegisters();
+        stepIdx = 0;
     }
 
     private void clearStack() {
@@ -1364,25 +1466,6 @@ public class VirtualMachine {
         throw new NotImplementedException();
     }
 
-    private void bbp(int adr, int i, int sz, int j) {
-        //dword wmask = (1U << sz) - 1;
-        //qword  q = j & wmask;
-        //qword mask = wmask;
-        //q = q << (i & 0x1F);
-        //mask = mask << (i & 0x1F);
-        //qword* pq = (qword*)(const byte*)&mem[adr + (i >> 5)];
-        //*pq = (*pq & ~mask) | q;
-        throw new NotImplementedException();
-    }
-
-    private int bbu(int adr, int i, int sz) {
-        //qword q = *(qword*)(const byte*)&mem[adr + (i >> 5)];
-        //q = q >> (i & 0x1F);
-        //dword d = (dword)q;
-        //return d & ((1 << sz) - 1);
-        throw new NotImplementedException();
-    }
-
     private void quote(int op) {
         // X MOD N = X - (X QOU N) * N
         switch (op)
@@ -1431,7 +1514,7 @@ public class VirtualMachine {
         mem(s++, x);
         mem(s++, l);
         if (extern)
-            mem(s, (int) ((long) pc | (1L << ExternalBit))); //TODO replace 1U
+            mem(s, (int) ((long) pc | (1L << ExternalBit)));
         else
             mem(s, pc);
         s += 2;
@@ -1441,7 +1524,7 @@ public class VirtualMachine {
     private VirtualMemory.VirtualMemoryPointer getCode(int f) {
         if (f < 0 || f > memory.getSize())
             ipt = 3;
-        return pmem(f % memory.getSize()); //TODO byte*
+        return pmem(f % memory.getSize());
     }
 
     private void saveStack() {
@@ -1786,7 +1869,7 @@ public class VirtualMachine {
         if (no >= 2 && no < 0xC)
         {
             mem(p + 6, no);
-            if ((m & (int) (1L << Integer.toUnsignedLong(no))) == 0) //TODO replace 1U
+            if ((m & (int) (1L << Integer.toUnsignedLong(no))) == 0)
             {
                 if (no != 3) // booter use Ipt 3 to determine memory size
                 {
@@ -1798,7 +1881,7 @@ public class VirtualMachine {
         }
         if (no == 1  && (m & 0x2) == 0)
             return;
-        if (no == 0x3F && (m & (int) (1L << 31)) == 0) //TODO replace 1U
+        if (no == 0x3F && (m & (int) (1L << 31)) == 0)
             return;
         transfer(no*2, mem(no * 2 + 1));
     }

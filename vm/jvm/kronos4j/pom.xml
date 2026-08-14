@@ -45,6 +45,14 @@
             <scope>compile</scope>
         </dependency>
 
+        <!-- Source: https://mvnrepository.com/artifact/org.apache.commons/commons-csv -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>1.14.1</version>
+            <scope>compile</scope>
+        </dependency>
+
         <!-- other dependencies -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

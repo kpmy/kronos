@@ -54,6 +54,47 @@ public class VirtualMemory {
         return pointer;
     }
 
+    int bbu(int adr, int i, int sz) {
+        int byteIdx = adr + (i >> 5);
+
+        long q = 0;
+        for (int b = 0; b < 4; b++) {
+            q |= ((long) (data[byteIdx + b] & 0xFF)) << (b * 8);
+        }
+
+        q = q >>> (i & 0x1F);
+        int d = (int) q;
+
+        // Используем 1L << sz, чтобы избежать переполнения int при sz = 32
+        int mask = (int) ((1L << sz) - 1);
+        return d & mask;
+    }
+
+    void bbp(int adr, int i, int sz, int j) {
+        // Вычисляем маску wmask как long, чтобы корректно поддерживать sz до 32 бит
+        long wmask = (1L << sz) - 1;
+        long q = j & wmask;
+        long mask = wmask; // mask теперь изначально типа long
+
+        int shift = i & 0x1F;
+        q = q << shift;
+        mask = mask << shift;
+
+        int byteIdx = adr + (i >> 5);
+
+        long currentQ = 0;
+        for (int b = 0; b < 4; b++) {
+            currentQ |= ((long) (data[byteIdx + b] & 0xFF)) << (b * 8);
+        }
+
+        // Теперь ~mask инвертирует честные 64 бита, не затрагивая лишнего
+        currentQ = (currentQ & ~mask) | q;
+
+        for (int b = 0; b < 4; b++) {
+            data[byteIdx + b] = (byte) (currentQ >>> (b * 8));
+        }
+    }
+
     /*
     * addressing words (32-bit)
      */

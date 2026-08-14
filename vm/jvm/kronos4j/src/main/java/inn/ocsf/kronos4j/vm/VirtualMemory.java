@@ -1,6 +1,7 @@
 package inn.ocsf.kronos4j.vm;
 
 import org.apache.commons.lang3.Conversion;
+import org.apache.commons.lang3.NotImplementedException;
 
 import java.util.Arrays;
 
@@ -93,10 +94,14 @@ public class VirtualMemory {
             return getValue(0);
         }
 
-        public void setValue(int value) {
+        public void setValue(int offset, int value) {
             if (address == null)
                 return;
-            Conversion.intToByteArray(value, 0, memory.data, 4 * address, 4);
+            Conversion.intToByteArray(value, 0, memory.data, 4 * (address + offset), 4);
+        }
+
+        public void setValue(int value) {
+            setValue(0, value);
         }
 
         public int getValueBytes(int byteOffset, int nOfBytes) {
@@ -120,6 +125,54 @@ public class VirtualMemory {
 
         public void setValues(byte[] data) {
             System.arraycopy(data, 0, memory.data, address * 4, data.length);
+        }
+
+        public void setValueBytes(int byteOffset, int nOfBytes, byte[] data) {
+            byte[] word = new byte[4];
+            int offset = byteOffset / 4;
+            int cidx = byteOffset % 4;
+            int oldValue0 = getValue(offset);
+            if (cidx + nOfBytes > word.length) {
+                throw new NotImplementedException();
+            }
+            Conversion.intToByteArray(oldValue0, 0, word, 0, 4);
+            System.arraycopy(data, 0, word, cidx, data.length);
+            int newValue0 = Conversion.byteArrayToInt(word, 0, 0, 0, nOfBytes);
+            setValue(offset, newValue0);
+        }
+    }
+
+    public static class U {
+        private int i;
+        private float f;
+
+        public U(int i, float f) {
+            this.i = i;
+            this.f = f;
+        }
+
+        public int getI() {
+            return i;
+        }
+
+        public void setI(int i) {
+            this.i = i;
+        }
+
+        public float getF() {
+            return f;
+        }
+
+        public void setF(float f) {
+            this.f = f;
+        }
+    }
+
+    public static class FI {
+        U u;
+
+        public FI(U u) {
+            this.u = u;
         }
     }
 }

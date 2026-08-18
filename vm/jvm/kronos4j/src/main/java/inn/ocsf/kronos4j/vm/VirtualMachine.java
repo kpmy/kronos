@@ -1,8 +1,8 @@
 package inn.ocsf.kronos4j.vm;
 
+import org.apache.commons.collections4.queue.CircularFifoQueue;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVRecord;
-import org.apache.commons.io.EndianUtils;
 import org.apache.commons.lang3.Conversion;
 import org.apache.commons.lang3.NotImplementedException;
 import org.apache.commons.lang3.tuple.Pair;
@@ -10,14 +10,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 public class VirtualMachine {
 
@@ -127,6 +124,10 @@ public class VirtualMachine {
     private boolean bDebug = false;
     private boolean bTimer = false;
     private boolean sPause = false;
+
+
+    private Queue<VirtualMachineStepDump> steps = new CircularFifoQueue<>(1024);
+    private VirtualMachineStepDump currentStep = null;
     private long stepIdx = 0;
 
     private VirtualMemory.VirtualMemoryPointer pcode;
@@ -219,16 +220,22 @@ public class VirtualMachine {
         start();
         boolean badIrq = false;
         while (!sPause && !badIrq) {
+            dumpStart();
             badIrq = step();
-            dump();
+            dumpStop();
             stepIdx++;
         }
         stop();
         stopTimer();
     }
 
-    private void dump() {
+    private void dumpStart() {
+        currentStep = new VirtualMachineStepDump(this);
+    }
 
+    private void dumpStop() {
+        currentStep.dump(this);
+        steps.add(currentStep);
     }
 
     public boolean step() throws InterruptedException {
@@ -1914,6 +1921,7 @@ public class VirtualMachine {
         try {
             run();
         } catch (Exception e) {
+            stopTimer();
             throw new RuntimeException(e);
         }
     }
@@ -1938,5 +1946,71 @@ public class VirtualMachine {
         if (top == null)
             throw new IllegalStateException();
         return top;
+    }
+
+    public static class VirtualMachineStepDump {
+
+        private final long stepIdx;
+        int memorySizeBytes;
+        private Integer[] astack;
+        private int
+                ipt,
+                sp,
+                pc,
+                pcs,
+                ir,
+                p,
+                l,
+                g,
+                m,
+                h,
+                s,
+                f;
+        private byte[] memory;
+        private Map<Integer, byte[]> memoryDiff = new HashMap<>();
+
+        public VirtualMachineStepDump(VirtualMachine machine) {
+            this.stepIdx = machine.stepIdx;
+            this.astack = new Integer[AStackSize];
+            this.memorySizeBytes = machine.memory.getSize() * 4;
+            memory = new byte[memorySizeBytes];
+            System.arraycopy(machine.memory.data, 0, memory, 0, memory.length);
+        }
+
+        public void dump(VirtualMachine machine) {
+            for(int s = 0; s < AStackSize; s++) {
+                this.astack[s] = machine.astack[s];
+            }
+            int m0 = 0;
+            do {
+                int m1 = Arrays.mismatch(memory, m0, memorySizeBytes, machine.memory.data, m0, memorySizeBytes);
+                if (m1 >= 0) {
+                    m0 += m1;
+                    memoryDiff.put(m0, new byte[]{memory[m0], machine.memory.data[m0]});
+                    m0++;
+                } else {
+                    m0 = -1;
+                }
+            } while (m0 >= 0);
+
+            memory = null;
+            ipt = machine.ipt;
+            sp = machine.sp;
+            pc = machine.pc;
+            pcs = machine.pcs;
+            ir = machine.ir;
+            p = machine.p;
+            l = machine.l;
+            g = machine.g;
+            m = machine.m;
+            h = machine.h;
+            s = machine.s;
+            f = machine.f;
+        }
+
+        @Override
+        public String toString() {
+            return String.format("#%d: %s [0x%02X], PC %d, IPT %d, SP %d, module MPG[%d, %d, %,d] code LFHS[%d, %d, %d, %d], astack [%s]", stepIdx, MCODES.get(ir),  ir, pcs, ipt, sp, m, p, g, l, f, h, s, Arrays.stream(astack).filter(Objects::nonNull).map(v -> String.format("%d", v)).collect(Collectors.joining(", ")));
+        }
     }
 }

@@ -11,7 +11,7 @@ public class VirtualMemory {
     private final int IGD480bitmap = 0x1F8000;    // bitmap base
     private final int IGD480size   = 512 * 512 / 8;
 
-    private byte[] data;
+    byte[] data;
     private int memorySizeBytes;
     private int memorySize;
     private boolean outOfRange;

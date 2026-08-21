@@ -146,7 +146,7 @@ public class VirtualMachine {
     private void startTimer() {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(() -> {
-            bTimer = false;
+            bTimer = true;
         }, 0, 100, TimeUnit.MILLISECONDS);
     }
 
@@ -462,21 +462,21 @@ public class VirtualMachine {
             }
 
             case 0x8E: // ROL  word ROtate Left
-            {   long i = (long) pop() & 0x1F;
+            {   int i = pop() & 0x1F;
                 if (i != 0)
                 {
-                    long j = (long) pop();
-                    push((int) ( (j << i) | (j >> (32-i))) );
+                    int j = pop();
+                    push(Integer.rotateLeft(j, i));
                 }
                 break;
             }
             case 0x8F: // ROR  word ROtate Right
             {
-                long i = (long)pop() & 0x1F;
+                int i = pop() & 0x1F;
                 if (i != 0)
                 {
-                    long j = (long)pop();
-                    push((int) ( (j >> i) | (j << (32-i))));
+                    int j = pop();
+                    push(Integer.rotateRight(j, i));
                 }
                 break;
             }
@@ -815,7 +815,8 @@ public class VirtualMachine {
                 if (pop() != 0)
                 {
                     push(1);
-                    pc = next() + pc;
+                    int pc1 = next();
+                    pc += pc1;
                 }
                 else
                     pc++;
@@ -825,7 +826,8 @@ public class VirtualMachine {
                 if (pop() == 0)
                 {
                     push(0);
-                    pc = next() + pc;
+                    int pc1 = next();
+                    pc += pc1;
                 }
                 else
                     pc++;

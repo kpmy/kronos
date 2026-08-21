@@ -146,7 +146,7 @@ public class VirtualMachine {
     private void startTimer() {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(() -> {
-            bTimer = true;
+            bTimer = false;
         }, 0, 100, TimeUnit.MILLISECONDS);
     }
 
@@ -201,7 +201,11 @@ public class VirtualMachine {
                 //     if (s != NULL)
                 //         Ipt = s->ipt() + 1;
                 // }
-                throw new NotImplementedException("io inp");
+                if (console.isInpIptEnabled()) {
+                    ipt = console.getIpt();
+                } else if (console.isOutIptEnabled()) {
+                    ipt = console.getIpt() + 1;
+                }
             }
         }
         if (ipt != 0) {
@@ -247,7 +251,7 @@ public class VirtualMachine {
         {
             int irCount = irCountMap.getOrDefault(ir, 0);
             if(irCount == 0) {
-                log.info("new IR 0x{} {}", String.format("%02X",  ir), MCODES.get(ir));
+                //log.info("new IR 0x{} {}", String.format("%02X",  ir), MCODES.get(ir));
             }
             irCountMap.put(ir, irCount+1);
         }
@@ -1981,18 +1985,20 @@ public class VirtualMachine {
             for(int s = 0; s < AStackSize; s++) {
                 this.astack[s] = machine.astack[s];
             }
-            int m0 = 0;
-            do {
-                int m1 = Arrays.mismatch(memory, m0, memorySizeBytes, machine.memory.data, m0, memorySizeBytes);
-                if (m1 >= 0) {
-                    m0 += m1;
-                    memoryDiff.put(m0, new byte[]{memory[m0], machine.memory.data[m0]});
-                    m0++;
-                } else {
-                    m0 = -1;
-                }
-            } while (m0 >= 0);
-
+            boolean dumpMem = false;
+            if (dumpMem) {
+                int m0 = 0;
+                do {
+                    int m1 = Arrays.mismatch(memory, m0, memorySizeBytes, machine.memory.data, m0, memorySizeBytes);
+                    if (m1 >= 0) {
+                        m0 += m1;
+                        memoryDiff.put(m0, new byte[]{memory[m0], machine.memory.data[m0]});
+                        m0++;
+                    } else {
+                        m0 = -1;
+                    }
+                } while (m0 >= 0);
+            }
             memory = null;
             ipt = machine.ipt;
             sp = machine.sp;

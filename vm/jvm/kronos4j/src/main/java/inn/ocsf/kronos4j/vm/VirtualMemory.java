@@ -59,7 +59,11 @@ public class VirtualMemory {
 
         long q = 0;
         for (int b = 0; b < 4; b++) {
-            q |= ((long) (data[byteIdx + b] & 0xFF)) << (b * 8);
+            int bbyteIdx = byteIdx + b;
+            if(bbyteIdx < 0 || bbyteIdx >= data.length) {
+                throw new IllegalArgumentException();
+            }
+            q |= ((long) (data[bbyteIdx] & 0xFF)) << (b * 8);
         }
 
         q = q >>> (i & 0x1F);
@@ -84,14 +88,22 @@ public class VirtualMemory {
 
         long currentQ = 0;
         for (int b = 0; b < 4; b++) {
-            currentQ |= ((long) (data[byteIdx + b] & 0xFF)) << (b * 8);
+            int bbyteIdx = byteIdx + b;
+            if(bbyteIdx < 0 || bbyteIdx >= data.length) {
+                throw new IllegalArgumentException();
+            }
+            currentQ |= ((long) (data[bbyteIdx] & 0xFF)) << (b * 8);
         }
 
         // Теперь ~mask инвертирует честные 64 бита, не затрагивая лишнего
         currentQ = (currentQ & ~mask) | q;
 
         for (int b = 0; b < 4; b++) {
-            data[byteIdx + b] = (byte) (currentQ >>> (b * 8));
+            int bbyteIdx = byteIdx + b;
+            if(bbyteIdx < 0 || bbyteIdx >= data.length) {
+                throw new IllegalArgumentException();
+            }
+            data[bbyteIdx] = (byte) (currentQ >>> (b * 8));
         }
     }
 

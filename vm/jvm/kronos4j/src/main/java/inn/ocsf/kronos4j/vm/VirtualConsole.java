@@ -6,7 +6,7 @@ public class VirtualConsole {
     private final int address;
     private final int ipt;
     private boolean outIptEnabled = true;
-    private boolean inpIptEnabled = false;
+    private boolean inpIptEnabled = true;
 
     public VirtualConsole(int address, int ipt) {
         this.address = address;
@@ -34,5 +34,17 @@ public class VirtualConsole {
 
     public int getAddress() {
         return address;
+    }
+
+    public int getIpt() {
+        return ipt;
+    }
+
+    public boolean isOutIptEnabled() {
+        return outIptEnabled;
+    }
+
+    public boolean isInpIptEnabled() {
+        return inpIptEnabled;
     }
 }

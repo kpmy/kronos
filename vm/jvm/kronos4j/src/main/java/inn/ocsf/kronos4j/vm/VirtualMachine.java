@@ -1,5 +1,6 @@
 package inn.ocsf.kronos4j.vm;
 
+import org.apache.commons.collections4.map.ListOrderedMap;
 import org.apache.commons.collections4.queue.CircularFifoQueue;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVRecord;
@@ -226,6 +227,7 @@ public class VirtualMachine {
         while (!sPause && !badIrq) {
             dumpStart();
             badIrq = step();
+            clearStack();
             dumpStop();
             stepIdx++;
         }
@@ -1116,7 +1118,7 @@ public class VirtualMachine {
                 int j = next();
                 i = mem(g - i - 1);
                 //((byte*)&i)[3] = (byte)j;
-                i = Conversion.byteArrayToInt(new byte[]{(byte) j}, 0, i, 3, 1);
+                i = Conversion.byteArrayToInt(new byte[]{(byte) j}, 0, i, 3 * 8, 1); //dstPos in bits
                 push(i);
                 break;
             }
@@ -1325,7 +1327,6 @@ public class VirtualMachine {
         {
             throw new RuntimeException();
         }
-        clearStack();
         return false;
     }
 
@@ -1956,31 +1957,51 @@ public class VirtualMachine {
 
     public static class VirtualMachineStepDump {
 
+        private final Logger log = LoggerFactory.getLogger(this.getClass());
+
         private final long stepIdx;
         int memorySizeBytes;
-        private Integer[] astack;
+
         private int
-                ipt,
-                sp,
-                pc,
-                pcs,
-                ir,
-                p,
-                l,
-                g,
-                m,
-                h,
-                s,
-                f;
+                ipt, ipts,
+                sp, sps,
+                pc,                pcs,
+                ir, irs,
+                p, ps,
+                l, ls,
+                g, gs,
+                m, ms,
+                h, hs,
+                s, ss,
+                f, fs;
         private byte[] memory;
-        private Map<Integer, byte[]> memoryDiff = new HashMap<>();
+        private Integer[] astack;
+        private Integer[] astackOld;
+        private Map<Pair<Integer, Pair<Integer, Integer>>, byte[]> memoryDiff = new ListOrderedMap<>();
 
         public VirtualMachineStepDump(VirtualMachine machine) {
             this.stepIdx = machine.stepIdx;
             this.astack = new Integer[AStackSize];
+            this.astackOld = new Integer[AStackSize];
             this.memorySizeBytes = machine.memory.getSize() * 4;
             memory = new byte[memorySizeBytes];
+
             System.arraycopy(machine.memory.data, 0, memory, 0, memory.length);
+
+            for(int s = 0; s < AStackSize; s++) {
+                this.astackOld[s] = machine.astack[s];
+            }
+            ipts = machine.ipt;
+            sps = machine.sp;
+            pcs = machine.pc;
+            irs = machine.ir;
+            ps = machine.p;
+            ls = machine.l;
+            gs = machine.g;
+            ms = machine.m;
+            hs = machine.h;
+            ss = machine.s;
+            fs = machine.f;
         }
 
         public void dump(VirtualMachine machine) {
@@ -1994,7 +2015,7 @@ public class VirtualMachine {
                     int m1 = Arrays.mismatch(memory, m0, memorySizeBytes, machine.memory.data, m0, memorySizeBytes);
                     if (m1 >= 0) {
                         m0 += m1;
-                        memoryDiff.put(m0, new byte[]{memory[m0], machine.memory.data[m0]});
+                        memoryDiff.put(Pair.of(m0, Pair.of(m0 / 4, m0 % 4)), new byte[]{memory[m0], machine.memory.data[m0]});
                         m0++;
                     } else {
                         m0 = -1;
@@ -2005,7 +2026,6 @@ public class VirtualMachine {
             ipt = machine.ipt;
             sp = machine.sp;
             pc = machine.pc;
-            pcs = machine.pcs;
             ir = machine.ir;
             p = machine.p;
             l = machine.l;
@@ -2014,11 +2034,17 @@ public class VirtualMachine {
             h = machine.h;
             s = machine.s;
             f = machine.f;
+            if (!memoryDiff.isEmpty()) {
+                log.info("step {}, {} bytes changed", stepIdx, memoryDiff.size());
+            }
         }
 
         @Override
         public String toString() {
-            return String.format("#%d: %s [0x%02X], PC %d, IPT %d, SP %d, module MPG[%d, %d, %,d] code LFHS[%d, %d, %d, %d], astack [%s]", stepIdx, MCODES.get(ir),  ir, pcs, ipt, sp, m, p, g, l, f, h, s, Arrays.stream(astack).filter(Objects::nonNull).map(v -> String.format("%d", v)).collect(Collectors.joining(", ")));
+            return String.format("#%d: %s [0x%02X], PC %d->%d, IPT %d->%d, SP %d->%d, module MPG[%d->%d, %d->%d, %,d->%d] code LFHS[%d->%d, %d->%d, %d->%d, %d->%d], astack [%s]->[%s]", stepIdx, MCODES.get(ir),  ir, pcs, pc, ipts, ipt, sps, sp, ms, m, ps, p, gs, g, ls, l, fs, f, hs, h, ss, s,
+                    Arrays.stream(astackOld).filter(Objects::nonNull).map(v -> String.format("%d", v)).collect(Collectors.joining(", ")),
+                    Arrays.stream(astack).filter(Objects::nonNull).map(v -> String.format("%d", v)).collect(Collectors.joining(", "))
+            );
         }
     }
 }

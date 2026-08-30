@@ -12,8 +12,8 @@ public class VirtualMemory {
     private final int IGD480size   = 512 * 512 / 8;
 
     byte[] data;
-    private int memorySizeBytes;
-    private int memorySize;
+    private final int memorySizeBytes;
+    private final int memorySize;
     private boolean outOfRange;
 
     public VirtualMemory(int memorySizeBytes) {
@@ -150,7 +150,7 @@ public class VirtualMemory {
         public void setValue(int offset, int value) {
             if (address == null)
                 return;
-            if (address + offset == 75922) {
+            if (address + offset == 74698) {
                 address = address; //TODO debug memory cell
             }
             Conversion.intToByteArray(value, 0, memory.data, 4 * (address + offset), 4);

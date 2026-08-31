@@ -1,0 +1,75 @@
+# ==========================================
+# Visual Studio - User & Environment Files
+# ==========================================
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.vshistory/
+*.localhistory/
+
+# ==========================================
+# C++ Build Outputs (MSVC, GCC, Clang)
+# ==========================================
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+[Bb]ld/
+[Oo]ut/
+GeneratedFiles/
+
+# ==========================================
+# C++ Compiled Objects and Libraries
+# ==========================================
+*.obj
+*.o
+*.lo
+*.slo
+*.lib
+*.a
+*.dll
+*.so
+*.so.*
+*.dylib
+*.exp
+
+# ==========================================
+# Headers, Linker, and Debugger Artifacts
+# ==========================================
+*.pdb
+*.ilk
+*.idb
+*.gch
+*.pch
+*.iobj
+*.ipdb
+*.tlog
+*.lastbuildstate
+
+# ==========================================
+# CMake and Build Systems (If used in VS)
+# ==========================================
+CMakeCache.txt
+CMakeFiles/
+CMakeSettings.json
+CMakeUserPresets.json
+cmake_install.cmake
+Makefile
+targets.make
+compile_commands.json
+.vcpkg/
+vcpkg_installed/
+
+# ==========================================
+# Diagnostics, Logs, and Caches
+# ==========================================
+*.log
+*.tlog
+*.ipch/
+*.cache
+*.db
+*.opendb

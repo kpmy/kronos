@@ -51,6 +51,7 @@ VM::VM(int nMemorySizeBytes, SioMouse* mouse, Console* con) :
     IR = 0;
     PCs = 0;
     Ipt = 0;
+	Step = 0;
     code = (byte*)&mem[0];
     memset(&AStack, 0, sizeof AStack);
     bTimer = false;
@@ -186,7 +187,7 @@ void VM::RestoreRegisters()
 
 void VM::Transfer(int p_to, int p_from)
 {
-//  trace("Transfer from %08X to %08X\n", P, mem[p_to]);
+  trace("Step %d, Transfer from %08X to %08X\n", Step, P, (int) mem[p_to]);
     int i = mem[p_to];
     mem[p_from] = P;
     SaveRegisters();
@@ -197,7 +198,7 @@ void VM::Transfer(int p_to, int p_from)
 
 void VM::Trap(int no)
 {
-//  trace("Trap %02.2X\n", no);
+  trace("Step %d, Trap %02.2X\n", Step, no);
 //  xxx: (only for debuging emulator itself.
     #ifdef _DEBUG
         if (no == 7)
@@ -652,8 +653,13 @@ void VM::Run()
         IR  = code[PC++];
 
 //      Sleep(0);
-//      trace("PC = %08x IR = %02X\n", PC, IR);
-
+		if (Step > 2000000 && Step < 3000000) {
+			//trace("Step = %d, PC = %08x, IR = %02X, X = %d \n", Step, PCs, IR, (int) mem[145222]);
+		}
+		if (Step / 100 == 9777){
+			//ShowRegisters();
+		}
+		Step++;
         switch (IR)
         {
             case 0x0: case 0x1: case 0x2: case 0x3:
@@ -1708,7 +1714,7 @@ void VM::IO(int no)
     {
         case 0: // INP
         {
-//          trace("io 0x90\n");
+          trace("Step %d, io 0x90\n", Step);
             int adr = Pop();
             int ioAddr = adr & 0xFFC;
 
@@ -1726,7 +1732,7 @@ void VM::IO(int no)
 
         case 1: // OUT
         {
-//          trace("io 0x91\n");
+          trace("Step %d, io 0x91\n", Step);
             int i = Pop(); 
             int adr = Pop();
             int ioAddr = adr & 0xFFC;
@@ -1745,7 +1751,7 @@ void VM::IO(int no)
 
         case 0x2: // 0x92 io2  -- "new" disk subsystem
         {
-//              trace("io 0x92\n");
+              trace("Step %d, io 0x92\n", Step);
                 int len = Pop();    // bytes
                 int adr = Pop();    // address
                 int sec = Pop();    // sector
@@ -1763,7 +1769,7 @@ void VM::IO(int no)
 
         case 0x4:
             {
-                trace("io 0x94\n");
+                trace("Step %d, io 0x94\n", Step);
                 Ipt = 7;  PC -= 2;
                 break;
             }
@@ -1930,7 +1936,7 @@ void VM::ShowRegisters()
     {
         printf("[%d] ", sp);
         for (int i = 0; i < sp; i++)
-            printf("%08X ", AStack[i]);
+            printf("%d ", AStack[i]);
     }
 }
 

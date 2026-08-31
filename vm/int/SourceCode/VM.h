@@ -42,6 +42,7 @@ private:
     int Ipt;
     int AStack[AStackSize];
     int sp;
+	int Step;
     byte* code;
 
     bool bTimer; // 20 msec interrupt source

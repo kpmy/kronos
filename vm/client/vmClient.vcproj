@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="Windows-1252"?>
 <VisualStudioProject
 	ProjectType="Visual C++"
-	Version="9.00"
+	Version="9,00"
 	Name="vmClient"
 	ProjectGUID="{0971FA32-4AA3-4073-8931-81C5734D56F2}"
 	TargetFrameworkVersion="0"
@@ -233,26 +233,8 @@
 				</FileConfiguration>
 			</File>
 			<File
-				RelativePath="..\VM\SourceCode\cO_win32_display.cpp"
+				RelativePath="..\int\SourceCode\cO_win32_display.cpp"
 				>
-				<FileConfiguration
-					Name="Release|Win32"
-					>
-					<Tool
-						Name="VCCLCompilerTool"
-						AdditionalIncludeDirectories=""
-						PreprocessorDefinitions=""
-					/>
-				</FileConfiguration>
-				<FileConfiguration
-					Name="Debug|Win32"
-					>
-					<Tool
-						Name="VCCLCompilerTool"
-						AdditionalIncludeDirectories=""
-						PreprocessorDefinitions=""
-					/>
-				</FileConfiguration>
 			</File>
 			<File
 				RelativePath="SourceCode\cO_win32_keyboard.cpp"
@@ -277,26 +259,8 @@
 				</FileConfiguration>
 			</File>
 			<File
-				RelativePath="..\VM\SourceCode\preCompiled.cpp"
+				RelativePath="..\int\SourceCode\preCompiled.cpp"
 				>
-				<FileConfiguration
-					Name="Release|Win32"
-					>
-					<Tool
-						Name="VCCLCompilerTool"
-						AdditionalIncludeDirectories=""
-						PreprocessorDefinitions=""
-					/>
-				</FileConfiguration>
-				<FileConfiguration
-					Name="Debug|Win32"
-					>
-					<Tool
-						Name="VCCLCompilerTool"
-						AdditionalIncludeDirectories=""
-						PreprocessorDefinitions=""
-					/>
-				</FileConfiguration>
 			</File>
 			<File
 				RelativePath="SourceCode\vmClient.cpp"
@@ -330,7 +294,7 @@
 				>
 			</File>
 			<File
-				RelativePath="..\VM\SourceCode\cO_win32_display.h"
+				RelativePath="..\int\SourceCode\cO_win32_display.h"
 				>
 			</File>
 			<File
@@ -338,7 +302,7 @@
 				>
 			</File>
 			<File
-				RelativePath="..\VM\SourceCode\preCompiled.h"
+				RelativePath="..\int\SourceCode\preCompiled.h"
 				>
 			</File>
 			<File

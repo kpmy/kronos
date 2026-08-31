@@ -13,7 +13,7 @@ public class VirtualMachineTest {
 
     @BeforeEach
     public void setup() {
-        vm = new VirtualMachine(1024);
+        vm = new VirtualMachine(1024, null);
         byte[] boot = new byte[]{
                 0x0, 0x0, 0x0, 0x0, //empty
                 0x8, 0x0, 0x0, 0x0, //p

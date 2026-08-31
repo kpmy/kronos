@@ -31,7 +31,7 @@ public class Kronos4JVM {
 
     public static final Logger LOG =  LoggerFactory.getLogger(Kronos4JVM.class);
 
-    public static void main(String[] args) throws InterruptedException, ConfigurationException, IOException {
+    public static void main(String[] args) throws ConfigurationException, IOException {
         VirtualConsole console = new VirtualConsoleSystem(0xFB8, 0x0C);
         VirtualMachine vm = new VirtualMachine(MEMORY_SIZE, console);
         Parameters params = new Parameters();
@@ -51,28 +51,31 @@ public class Kronos4JVM {
 
     private static void addTrace(VirtualMachine vm, Configuration config) throws IOException {
         VirtualMachineTrace trace = new VirtualMachineTrace();
-        var traceFilePath = config.getString("kronos.trace");
-        if (traceFilePath != null && Files.exists(Paths.get(traceFilePath))) {
-            String traceTxt = FileUtils.readFileToString(Paths.get(traceFilePath).toFile(), StandardCharsets.UTF_8);
-            BufferedReader reader = new BufferedReader(new StringReader(traceTxt));
-            String traceLine;
-            do {
-                traceLine = reader.readLine();
-                if (traceLine == null) {
-                    continue;
-                }
-                if (!traceLine.startsWith("Step =")) {
-                    continue;
-                }
-                Map<String, String> paramMap = new HashMap<>();
-                String[] params = traceLine.split(", ", -1);
-                //LOG.info("trace line: {}", traceLine);
-                Arrays.stream(params).map(s -> s.split(" = ")).forEach(pair -> {
-                    paramMap.put(pair[0], pair[1]);
-                });
-                trace.addStep(paramMap);
-            } while (traceLine != null);
-            vm.setTrace(trace);
+        var traceFileStr = config.getString("kronos.trace");
+        if (traceFileStr != null) {
+            Path traceFilePath = Paths.get(traceFileStr);
+            if (Files.exists(traceFilePath)) {
+                String traceTxt = FileUtils.readFileToString(traceFilePath.toFile(), StandardCharsets.UTF_8);
+                BufferedReader reader = new BufferedReader(new StringReader(traceTxt));
+                String traceLine;
+                do {
+                    traceLine = reader.readLine();
+                    if (traceLine == null) {
+                        continue;
+                    }
+                    if (!traceLine.startsWith("Step =")) {
+                        continue;
+                    }
+                    Map<String, String> paramMap = new HashMap<>();
+                    String[] params = traceLine.split(", ", -1);
+                    //LOG.info("trace line: {}", traceLine);
+                    Arrays.stream(params).map(s -> s.split(" = ")).forEach(pair -> {
+                        paramMap.put(pair[0], pair[1]);
+                    });
+                    trace.addStep(paramMap);
+                } while (traceLine != null);
+                vm.setTrace(trace);
+            }
         }
     }
 

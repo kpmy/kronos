@@ -215,7 +215,7 @@ public class VirtualMachine {
                 //         Ipt = s->ipt() + 1;
                 // }
                 if (console.isInpIptEnabled()) {
-                    //ipt = console.getIpt();
+                    ipt = console.getIpt();
                 } else if (console.isOutIptEnabled()) {
                     ipt = console.getIpt() + 1;
                 }

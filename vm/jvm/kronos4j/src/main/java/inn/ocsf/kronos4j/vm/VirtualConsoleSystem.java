@@ -1,20 +1,30 @@
 package inn.ocsf.kronos4j.vm;
 
 import org.apache.commons.lang3.NotImplementedException;
+import org.jline.terminal.Terminal;
+import org.jline.terminal.TerminalBuilder;
+import org.jline.utils.NonBlockingReader;
+
+import java.io.IOException;
 
 public class VirtualConsoleSystem implements VirtualConsole {
     private static final int EMPTY_CHAR = 512;
 
     private final int address;
     private final int ipt;
-    private boolean outIptEnabled = true;
-    private boolean inpIptEnabled = true;
+    private boolean outIptEnabled = false;
+    private boolean inpIptEnabled = false;
     private int inChar;
+    private Terminal terminal;
+    private NonBlockingReader reader;
 
-    public VirtualConsoleSystem(int address, int ipt) {
+    public VirtualConsoleSystem(int address, int ipt) throws IOException {
         this.address = address;
         this.ipt = ipt;
         inChar = EMPTY_CHAR;
+        terminal = TerminalBuilder.builder().jna(true).system(true).build();
+        terminal.enterRawMode();
+        reader = terminal.reader();
     }
 
     @Override
@@ -22,11 +32,23 @@ public class VirtualConsoleSystem implements VirtualConsole {
         switch (addr & 0x0003) {
             case 0:
                 if (inChar == EMPTY_CHAR) {
-                    //inChar = po->busyRead();
+                    inChar = busyRead();
                 }
                 return (inpIptEnabled ? 0100 : 0) | (inChar != EMPTY_CHAR ? 0200 : 0);
+            case 1:
+            {
+                if (inChar == EMPTY_CHAR) {
+                    inChar = busyRead();
+                }
+                int data = inChar == EMPTY_CHAR ? 0 : inChar;
+                inChar = EMPTY_CHAR;
+
+                return data & 0xFF;
+            }
             case 2:
                 return 0200 | (outIptEnabled ? 0100 : 0); //0b1000_0000 | (outIptEnabled ? 0b0100_0000 : 0);
+            case 3:
+                return 0;
             default:
                 throw new NotImplementedException();
         }
@@ -60,6 +82,28 @@ public class VirtualConsoleSystem implements VirtualConsole {
 
     @Override
     public boolean isInpIptEnabled() {
-        return inpIptEnabled;
+        if (inChar == EMPTY_CHAR) {
+            inChar = busyRead();
+        }
+        return inpIptEnabled && inChar != EMPTY_CHAR;
+    }
+
+    private int busyRead() {
+        int res = EMPTY_CHAR;
+        try {
+            int ret = -1;
+            if (reader.ready()) {
+                ret = reader.read(1);
+            }
+            switch (ret) {
+                case NonBlockingReader.EOF, NonBlockingReader.READ_EXPIRED -> {
+                    //do nothing
+                }
+                default -> res = ret;
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        return res;
     }
 }

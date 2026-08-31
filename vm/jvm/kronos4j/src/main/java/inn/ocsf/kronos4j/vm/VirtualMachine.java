@@ -152,7 +152,7 @@ public class VirtualMachine {
     private void startTimer() {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(() -> {
-            //bTimer = true;
+            bTimer = true;
         }, 0, 100, TimeUnit.MILLISECONDS);
     }
 

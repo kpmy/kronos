@@ -11,7 +11,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.Executors;
@@ -142,10 +141,10 @@ public class VirtualMachine {
     //debug
     private final Map<Integer, Integer> irCountMap = new HashMap<>();
 
-    public VirtualMachine(int memorySize) {
+    public VirtualMachine(int memorySize, VirtualConsole console) {
         memory = new VirtualMemory(memorySize);
         pcode = pmem(0);
-        console = new VirtualConsole(0xFB8, 0x0C);
+        this.console = console;
         serial = new VirtualSerial();
     }
 

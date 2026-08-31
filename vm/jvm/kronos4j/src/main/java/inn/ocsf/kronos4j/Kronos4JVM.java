@@ -1,8 +1,6 @@
 package inn.ocsf.kronos4j;
 
-import inn.ocsf.kronos4j.vm.VirtualDisk;
-import inn.ocsf.kronos4j.vm.VirtualMachine;
-import inn.ocsf.kronos4j.vm.VirtualMachineTrace;
+import inn.ocsf.kronos4j.vm.*;
 import org.apache.commons.configuration2.Configuration;
 import org.apache.commons.configuration2.FileBasedConfiguration;
 import org.apache.commons.configuration2.PropertiesConfiguration;
@@ -34,7 +32,8 @@ public class Kronos4JVM {
     public static final Logger LOG =  LoggerFactory.getLogger(Kronos4JVM.class);
 
     public static void main(String[] args) throws InterruptedException, ConfigurationException, IOException {
-        VirtualMachine vm = new VirtualMachine(MEMORY_SIZE);
+        VirtualConsole console = new VirtualConsoleSystem(0xFB8, 0x0C);
+        VirtualMachine vm = new VirtualMachine(MEMORY_SIZE, console);
         Parameters params = new Parameters();
         FileBasedConfigurationBuilder<FileBasedConfiguration> builder =
                 new FileBasedConfigurationBuilder<FileBasedConfiguration>(PropertiesConfiguration.class)

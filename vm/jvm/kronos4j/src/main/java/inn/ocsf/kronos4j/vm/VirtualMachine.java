@@ -11,6 +11,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.*;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -22,7 +24,7 @@ public class VirtualMachine {
     public static final String M_CODE_TABLE = """
             --   00     20      40      60      80     A0     C0     E0
             
-            00   LI0    LLW     LXB     LSW0           LSS    MOVE   INCL
+            00   LI0    LLW     LXB     LSW0 *IOR     LSS    MOVE   INCL
             01   LI1    LGW     LXW     LSW1    QUIT   LEQ  **CHKNIL EXCL
             02   LI2    LEW     LGW2    LSW2    GETM   GTR    LSTA  *INL
             03   LI3    LSW     LGW3    LSW3    SETM   GEQ    COMP  *QUOT
@@ -106,6 +108,7 @@ public class VirtualMachine {
     private List<VirtualDisk> disks = new ArrayList<>();
 
     private VirtualConsole console;
+    private VirtualSerial serial;
 
     private ScheduledExecutorService scheduler;
 
@@ -130,6 +133,7 @@ public class VirtualMachine {
     private Queue<VirtualMachineStepDump> steps = new CircularFifoQueue<>(1024);
     private VirtualMachineStepDump currentStep = null;
     private long stepIdx = 0;
+    private VirtualMachineTrace trace;
 
     private VirtualMemory.VirtualMemoryPointer pcode;
 
@@ -142,12 +146,13 @@ public class VirtualMachine {
         memory = new VirtualMemory(memorySize);
         pcode = pmem(0);
         console = new VirtualConsole(0xFB8, 0x0C);
+        serial = new VirtualSerial();
     }
 
     private void startTimer() {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(() -> {
-            bTimer = true;
+            //bTimer = true;
         }, 0, 100, TimeUnit.MILLISECONDS);
     }
 
@@ -174,6 +179,14 @@ public class VirtualMachine {
 
     public VirtualMemory getMemory() {
         return memory;
+    }
+
+    public VirtualMachineTrace getTrace() {
+        return trace;
+    }
+
+    public void setTrace(VirtualMachineTrace trace) {
+        this.trace = trace;
     }
 
     private boolean irq() {
@@ -203,7 +216,7 @@ public class VirtualMachine {
                 //         Ipt = s->ipt() + 1;
                 // }
                 if (console.isInpIptEnabled()) {
-                    ipt = console.getIpt();
+                    //ipt = console.getIpt();
                 } else if (console.isOutIptEnabled()) {
                     ipt = console.getIpt() + 1;
                 }
@@ -331,7 +344,7 @@ public class VirtualMachine {
             case 0x40:  {   int i = pop();
                 int j = pop();
                 VirtualMemory.VirtualMemoryPointer s = pmem(j + i / 4);
-                push((byte) s.getValueBytes(i % 4, 1));
+                push(s.getValueBytes(i % 4, 1));
                 break;
             }
 
@@ -871,14 +884,16 @@ public class VirtualMachine {
             {
                 int i = pop();
                 int j = pop();
-                byte pa = (byte) mem(i);
-                byte pb = (byte) mem(j);
-                byte a = pa++;
-                byte b = pb++;
+                var p_a = pmem(i);
+                var p_b = pmem(j);
+                int pa = 0;
+                int pb = 0;
+                byte a = (byte) p_a.getValueBytes(pa++, 1);
+                byte b = (byte) p_b.getValueBytes(pb++, 1);
                 while (a == b && b != 0 && a != 0)
                 {
-                    a = pa++;
-                    b = pb++;
+                    a = (byte) p_a.getValueBytes(pa++, 1);
+                    b = (byte) p_b.getValueBytes(pb++, 1);
                 }
                 push(b); push(a); // bug in docs!!!
                 break;
@@ -1623,6 +1638,7 @@ public class VirtualMachine {
     }
 
     private void io(int no) {
+        //log.info("step {}, io {}", stepIdx, String.format("%x", no));
         switch (no) {
             case 0x0: { //input
                 int adr = pop();
@@ -1630,14 +1646,14 @@ public class VirtualMachine {
                 if (ioAddr == console.getAddress()) { // console ipt 0x0C
                     push(console.inp(adr));
                 } else {
-                    Integer inp = 0; //TODO
+                    Integer inp = serial.inp(no, ioAddr, adr);
                     if (inp != null) {
-                        push(0);
+                        push(inp);
                     } else {
                         ipt = 3;
                         push(0);
                     }
-                    throw new NotImplementedException();
+                    //throw new NotImplementedException(String.format("in %x %x", no, ioAddr));
                 }
                 break;
             }
@@ -1648,7 +1664,8 @@ public class VirtualMachine {
                 if (ioAddr == console.getAddress()) {
                     console.out(adr, i);
                 } else {
-                    throw new NotImplementedException("out");
+                    serial.out(no, ioAddr, adr, i);
+                    //throw new NotImplementedException(String.format("out %x %x", no, ioAddr));
                 }
                 break;
             }
@@ -1661,11 +1678,19 @@ public class VirtualMachine {
                 push(doDiskOperation(op, dsk, sec, adr, len));
                 break;
             }
+            case 0x3: {
+                log.info("{}", String.format("%c", pop()));
+                break;
+            }
+            case 0x4: {
+                ipt = 7;  pc -= 2;
+                break;
+            }
             default:
-                //trace("unsupported i/o function %03X\n", no);
-                //Ipt = 7;  PC -= 2;
+                log.info("unsupported i/o function {}", String.format("%03X", no));
+                ipt = 7;  pc -= 2;
                 //break;
-                throw new NotImplementedException(String.format("unknown io channel %x", no));
+                //throw new NotImplementedException(String.format("unknown io channel %x", no));
             }
     }
 
@@ -1711,32 +1736,29 @@ public class VirtualMachine {
                 }
                 throw new NotImplementedException();
                 //return 0;
-            case 6:
-            {
-                //SYSTEMTIME st;
-                //GetLocalTime(&st);
-                //mem[adr++] = st.wYear;
-                //mem[adr++] = st.wMonth;
-                //mem[adr++] = st.wDay;
-                //mem[adr++] = st.wHour;
-                //mem[adr++] = st.wMinute;
-                //mem[adr++] = st.wSecond;
+            case 6: {
+                var now = LocalDateTime.now();
+                mem(adr++, now.getYear());
+                mem(adr++, now.getMonth().getValue());
+                mem(adr++, now.getDayOfMonth());
+                mem(adr++, now.getHour());
+                mem(adr++, now.getMinute());
+                mem(adr++, now.getSecond());
+                return 1;
             }
-            throw new NotImplementedException();
-            //return 0;
             case 8: // getspecs
                 if (dsk >= 0 && dsk < disks.size()) {
+                    //var p_spec = pmem(adr);
+                    //p_spec.setValues(disks.get(dsk).getSpecs().asBytes());
 
                 }
-                throw new NotImplementedException();
-                //return 0;
-                //return Disks.GetSpecs(dsk, (Request*)(byte*)&mem[adr]);
+                return 0;
             case 9: // setspecs
                 if (dsk >= 0 && dsk < disks.size()) {
 
                 }
-                throw new NotImplementedException();
-                //return 0;
+                //throw new NotImplementedException();
+                return 1;
                 //return Disks.SetSpecs(dsk, (Request*)(byte*)&mem[adr]);
             default:
                 //trace("invalid disk operation: %d\n", op);
@@ -1801,6 +1823,7 @@ public class VirtualMachine {
 
     private void transfer(int p_to, int p_from) {
         int i = mem(p_to);
+        //log.info("step {} transfer from {} to {} ", stepIdx, String.format("%x", p), String.format("%x", i));
         mem(p_from, p);
         saveRegisters();
         p = i;
@@ -1864,6 +1887,7 @@ public class VirtualMachine {
 
     private void trap(int no) {
         //  trace("Trap %02.2X\n", no);
+        //log.info("step {}, trap {}", stepIdx, String.format("%x", no));
         //  xxx: (only for debuging emulator itself.
         if (no == 7)
             bDebug = true;
@@ -1975,6 +1999,8 @@ public class VirtualMachine {
                 s, ss,
                 f, fs;
         private byte[] memory;
+        boolean dumpMem = false;
+
         private Integer[] astack;
         private Integer[] astackOld;
         private Map<Pair<Integer, Pair<Integer, Integer>>, byte[]> memoryDiff = new ListOrderedMap<>();
@@ -1984,10 +2010,11 @@ public class VirtualMachine {
             this.astack = new Integer[AStackSize];
             this.astackOld = new Integer[AStackSize];
             this.memorySizeBytes = machine.memory.getSize() * 4;
-            memory = new byte[memorySizeBytes];
 
-            System.arraycopy(machine.memory.data, 0, memory, 0, memory.length);
-
+            if (dumpMem) {
+                memory = new byte[memorySizeBytes];
+                System.arraycopy(machine.memory.data, 0, memory, 0, memory.length);
+            }
             for(int s = 0; s < AStackSize; s++) {
                 this.astackOld[s] = machine.astack[s];
             }
@@ -2008,7 +2035,7 @@ public class VirtualMachine {
             for(int s = 0; s < AStackSize; s++) {
                 this.astack[s] = machine.astack[s];
             }
-            boolean dumpMem = false;
+
             if (dumpMem) {
                 int m0 = 0;
                 do {
@@ -2036,6 +2063,17 @@ public class VirtualMachine {
             f = machine.f;
             if (!memoryDiff.isEmpty()) {
                 log.info("step {}, {} bytes changed", stepIdx, memoryDiff.size());
+            }
+            if (machine.trace != null) {
+                var traceStep = machine.trace.getSteps().get(stepIdx);
+                if (traceStep != null) {
+                    if (traceStep.getIr() != ir) {
+                        throw new RuntimeException(String.format("trace doesn't match %d", stepIdx));
+                    }
+                    machine.trace.getSteps().remove(stepIdx);
+                } else if (machine.trace.getSteps().isEmpty()){
+                    throw new RuntimeException("no trace");
+                }
             }
         }
 

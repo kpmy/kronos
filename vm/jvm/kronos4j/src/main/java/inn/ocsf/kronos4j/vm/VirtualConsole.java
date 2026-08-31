@@ -3,18 +3,27 @@ package inn.ocsf.kronos4j.vm;
 import org.apache.commons.lang3.NotImplementedException;
 
 public class VirtualConsole {
+    private static final int EMPTY_CHAR = 512;
+
     private final int address;
     private final int ipt;
     private boolean outIptEnabled = true;
     private boolean inpIptEnabled = true;
+    private int inChar;
 
     public VirtualConsole(int address, int ipt) {
         this.address = address;
         this.ipt = ipt;
+        inChar = EMPTY_CHAR;
     }
 
     public int inp(int addr) {
         switch (addr & 0x0003) {
+            case 0:
+                if (inChar == EMPTY_CHAR) {
+                    //inChar = po->busyRead();
+                }
+                return (inpIptEnabled ? 0100 : 0) | (inChar != EMPTY_CHAR ? 0200 : 0);
             case 2:
                 return 0200 | (outIptEnabled ? 0100 : 0); //0b1000_0000 | (outIptEnabled ? 0b0100_0000 : 0);
             default:

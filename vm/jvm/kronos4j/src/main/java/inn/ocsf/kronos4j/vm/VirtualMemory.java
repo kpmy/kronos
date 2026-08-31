@@ -150,7 +150,7 @@ public class VirtualMemory {
         public void setValue(int offset, int value) {
             if (address == null)
                 return;
-            if (address + offset == 74698) {
+            if (address + offset == 145222) {
                 address = address; //TODO debug memory cell
             }
             Conversion.intToByteArray(value, 0, memory.data, 4 * (address + offset), 4);

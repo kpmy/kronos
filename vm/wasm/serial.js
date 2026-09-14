@@ -1,6 +1,6 @@
 export class VirtualSerial {
     inpIptEnabled = true;
-    outIptEnabled = true;
+    outIptEnabled = false;
 
     out(no, ioAddr, adr, i) {
         switch (ioAddr) {

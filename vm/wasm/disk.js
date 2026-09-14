@@ -24,4 +24,8 @@ export class VirtualDisk {
     setMounted(ok){
         return true
     }
+
+    getSize4Kb() {
+        return this.fileBuffer.byteLength / (4 * 1024);
+    }
 }

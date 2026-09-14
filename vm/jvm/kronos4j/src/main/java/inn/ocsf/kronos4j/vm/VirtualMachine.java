@@ -282,6 +282,9 @@ public class VirtualMachine {
         }
         String irCode = String.format("%02X",  ir);
         String irName = MCODES.get(ir);
+        if (this.stepIdx >= 348410) {
+            irName = "[" + irCode + "]" + irName;
+        }
         switch (ir) {
             case 0x0: case 0x1: case 0x2: case 0x3:
             case 0x4: case 0x5: case 0x6: case 0x7:

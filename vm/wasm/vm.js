@@ -46,6 +46,7 @@ export class VirtualMachine {
 
     async loadTrace() {
         let trace = [];
+        let minStep = Number.MAX_VALUE;
         if (process.env.KRONOS_TRACE) {
             try {
                 await stat(process.env.KRONOS_TRACE);
@@ -54,7 +55,6 @@ export class VirtualMachine {
                     input: file.createReadStream(),
                     crlfDelay: Infinity
                 });
-                let minStep = Number.MAX_VALUE;
                 for await (const line of rl) {
                     if (line.startsWith("Step =")){
                         let lineRet = {}
@@ -72,14 +72,12 @@ export class VirtualMachine {
                     }
                 }
                 console.log(`loaded ${trace.length} traces starting from ${minStep}`);
-                for (let missedStep = 0; missedStep < minStep; missedStep++) {
-                    trace.unshift(null);
-                }
             } catch (e) {
                 throw e;
             }
         }
-        return trace;
+        this.trace =  trace;
+        this.traceMinStep = minStep;
     }
 
     async runSafe() {
@@ -92,12 +90,12 @@ export class VirtualMachine {
     }
 
     async run() {
-        this.trace = await this.loadTrace();
+        await this.loadTrace();
         this.wabt = await wabt();
         await this.start()
         let badIrq = false;
         while (!badIrq) {
-            badIrq = await this.step()
+            badIrq = this.step()
             for (let op of this.diskOpLater) {
                 await op();
             }
@@ -106,13 +104,23 @@ export class VirtualMachine {
                 this.checkTrace()
                 this.clearStack()
             }
+            if (this.memory.getReg(IR) === 0x87) { //IDLE
+                await new Promise(resolve => setTimeout(resolve, 1));
+            }
         }
         this.stop();
     }
 
     checkTrace() {
         if (this.trace.length === 0) {
-            return
+            if (!process.env.KRONOS_TRACE) {
+                return
+            } else {
+                throw 'empty trace...'
+            }
+        }
+        if(this.stepIdx - 1 < this.traceMinStep){
+            return;
         }
         let stepTrace = this.trace.shift()
         if (stepTrace == null) {
@@ -212,7 +220,7 @@ export class VirtualMachine {
         this.restoreRegisters();
     }
 
-    async step() {
+    step() {
         if(!this.irq())
             return true;
         let pcs = this.memory.getReg(PC);
@@ -222,6 +230,9 @@ export class VirtualMachine {
         let irCode = ir.toString(16).toUpperCase();
         let irName = IR_MAP[irCode];
         let irFunc = this.vm[`ir_${irName}`];
+        if (this.stepIdx >= 348410){
+            //debugger
+        }
         try {
             irFunc();
         } catch (e) {
@@ -299,6 +310,11 @@ export class VirtualMachine {
         this.bTimerDescr = setInterval(() => {
             //this.bTimer = true;
         }, 100)
+        Object.values(IR_MAP).forEach(ir=> {
+            if (this.vm[`ir_${ir}`] === undefined) {
+                console.error(`not implemented ${ir}`);
+            }
+        })
     }
 
     saveRegisters() {
@@ -588,7 +604,7 @@ const IR_MAP = {
     "77": "SSW7",
     "78": "SSW8",
     "79": "SSW9",
-    "80": "*IOR",
+    "80": "IOR",
     "81": "QUIT",
     "82": "GETM",
     "83": "SETM",
@@ -603,9 +619,9 @@ const IR_MAP = {
     "92": "IO2",
     "93": "IO3",
     "94": "IO4",
-    "95": "*ARRCMP",
-    "96": "*WM",
-    "97": "*BM",
+    "95": "ARRCMP",
+    "96": "WM",
+    "97": "BM",
     "98": "FADD",
     "99": "FSUB",
     "A": "LI0A",
@@ -692,10 +708,10 @@ const IR_MAP = {
     "B5": "COPT",
     "B6": "CPCOP",
     "B7": "PCOP",
-    "B8": "*FOR1",
-    "B9": "*FOR2",
-    "BA": "*ENTC",
-    "BB": "*XIT",
+    "B8": "FOR1",
+    "B9": "FOR2",
+    "BA": "ENTC",
+    "BB": "XIT",
     "BC": "ADDPC",
     "BD": "JMP",
     "BE": "ORJP",
@@ -734,8 +750,8 @@ const IR_MAP = {
     "DF": "CL0F",
     "E0": "INCL",
     "E1": "EXCL",
-    "E2": "*INL",
-    "E3": "*QUOT",
+    "E2": "INL",
+    "E3": "QUOT",
     "E4": "INC1",
     "E5": "DEC1",
     "E6": "INC",
@@ -744,9 +760,9 @@ const IR_MAP = {
     "E9": "LODT",
     "EA": "LXA",
     "EB": "LPC",
-    "EC": "**BBU",
-    "ED": "**BBP",
-    "EE": "**BBLT",
+    "EC": "BBU",
+    "ED": "BBP",
+    "EE": "BBLT",
     "EF": "PDX",
     "F0": "SWAP",
     "F1": "LPA",

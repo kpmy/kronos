@@ -6328,6 +6328,9 @@
                 ;; Вызываем хостовый метод сохранения контекста стека
                 (call $save_stack_host_call)
 
+             ;; --- ФИКС: Перечитываем мутировавший регистр S из памяти ---
+               (local.set $s (i32.load (global.get $S_ADDR)))
+
                 ;; Пересчитываем физический байтовый адрес для mem(s): s * 4
                 (local.set $target_byte_addr (i32.mul (local.get $s) (i32.const 4)))
                 (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
@@ -6372,6 +6375,29 @@
     (i32.store
       (global.get $PC_ADDR)
       (i32.sub (local.get $current_pc) (i32.const 1))
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция LXA (Опкод 0xEA) — Загрузка индексного адреса массива
+  ;; ========================================================
+  (func (export "ir_LXA")
+    (local $sz i32)           ;; Размер элемента в словах, извлекается ПЕРВЫМ
+    (local $i i32)            ;; Индекс элемента, извлекается ВТОРЫМ
+    (local $base_addr i32)    ;; Базовый адрес массива в словах, извлекается ТРЕТЬИМ
+
+    ;; 1. Извлекаем аргументы со стека выражений в строгом порядке Java
+    (local.set $sz (call $pop))
+    (local.set $i (call $pop))
+    (local.set $base_addr (call $pop))
+
+    ;; 2. Вычисляем: base_addr + (i * sz)
+    ;; и сразу пушим результат обратно на гостевой стек выражений
+    (call $push
+      (i32.add
+        (local.get $base_addr)
+        (i32.mul (local.get $i) (local.get $sz))
+      )
     )
   )
 

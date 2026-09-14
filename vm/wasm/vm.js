@@ -230,7 +230,7 @@ export class VirtualMachine {
         let irCode = ir.toString(16).toUpperCase();
         let irName = IR_MAP[irCode];
         let irFunc = this.vm[`ir_${irName}`];
-        if (this.stepIdx >= 348410){
+        if (this.stepIdx >= 2551330){
             //debugger
         }
         try {
@@ -308,7 +308,7 @@ export class VirtualMachine {
         this.vm = wasmInstance.exports;
         this.vm.init_vm(this.memory.totalPages, AStackSize)
         this.bTimerDescr = setInterval(() => {
-            //this.bTimer = true;
+            this.bTimer = true;
         }, 100)
         Object.values(IR_MAP).forEach(ir=> {
             if (this.vm[`ir_${ir}`] === undefined) {
@@ -343,11 +343,11 @@ export class VirtualMachine {
 
     saveStack() {
         let i = this.memory.getReg(S);
+        let s = i
         while (this.memory.getReg(SP) !== 0) {
-            let s = this.memory.getReg(S)
-            this.memory.store32(s, this.pop());
-            this.memory.setReg(s + 1, S)
+            this.memory.store32(s++, this.pop());
         }
+        this.memory.setReg(s, S)
         this.memory.store32(this.memory.getReg(S),  this.memory.getReg(S) - i);
         this.memory.setReg(this.memory.getReg(S) + 1, S);
     }

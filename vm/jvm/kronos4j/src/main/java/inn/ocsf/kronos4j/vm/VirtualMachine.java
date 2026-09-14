@@ -162,7 +162,7 @@ public class VirtualMachine {
     private void startTimer() {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(() -> {
-            //bTimer = true;
+            bTimer = true;
         }, 0, 100, TimeUnit.MILLISECONDS);
     }
 
@@ -282,7 +282,7 @@ public class VirtualMachine {
         }
         String irCode = String.format("%02X",  ir);
         String irName = MCODES.get(ir);
-        if (this.stepIdx >= 348410) {
+        if (this.stepIdx >= 2551340) {
             irName = "[" + irCode + "]" + irName;
         }
         switch (ir) {

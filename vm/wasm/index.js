@@ -27,9 +27,6 @@ let readBooter = async (vm, diskNo) => {
 }
 
 (async () => {
-    //process.stdin.setRawMode(true);
-    //process.stdin.resume();
-    //process.stdin.setEncoding('utf8'); //TODO
     let vm = new VirtualMachine(MEMORY_SIZE, new VirtualConsole(0xFB8, 0x0C));
     await addDisks(vm)
     if (vm.getDiskCount() > 1) {

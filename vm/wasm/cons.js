@@ -8,6 +8,8 @@ export class VirtualConsole {
     outIptEnabled
     inChar
 
+    inputQueue = [];
+
     constructor(address, ipt) {
         this.address = address;
         this.ipt = ipt;
@@ -15,6 +17,26 @@ export class VirtualConsole {
         this.inpIptEnabled = false
         this.outIptEnabled = false
         this.inChar = EMPTY_CHAR
+
+        if (process.stdin.isTTY) {
+            process.stdin.setRawMode(true);
+        }
+        process.stdin.resume();
+        process.stdin.setEncoding('utf8');
+
+        // Слушаем ввод от пользователя
+        process.stdin.on('data', (key) => {
+            // Обработка Ctrl+C для штатного выхода из эмулятора
+            if (key === '\u0003') {
+                console.log("\n[JS Host] terminated (Ctrl+C)...");
+                process.exit();
+            }
+
+            // Переводим символ в ASCII код и кладем в очередь
+            const charCode = key.charCodeAt(0);
+            this.inputQueue.push(charCode);
+        });
+
     }
 
     getAddress() {
@@ -73,7 +95,9 @@ export class VirtualConsole {
 
     busyRead() {
         let res = EMPTY_CHAR;
-        //process.stdin.read() //TODO
+        if (this.inputQueue.length > 0) {
+            res = this.inputQueue.shift();
+        }
         return res
     }
 }

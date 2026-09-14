@@ -73,3 +73,5 @@ vcpkg_installed/
 *.cache
 *.db
 *.opendb
+/vm/wasm/node_modules
+*.iml

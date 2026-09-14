@@ -1,0 +1,435 @@
+import wabt from "wabt";
+import {VirtualMemory, IPT, P, H, IR, F, G, PC, S, SP, M, L, CODE, STACK} from './mem.js'
+import { readFile } from 'fs/promises'
+import * as path from "node:path";
+const AStackSize = 15
+
+export class VirtualMachine {
+    memory
+    disks
+    wabt
+    vm
+
+    constructor(memorySizeBytes) {
+        this.disks = [];
+        this.memory = new VirtualMemory(memorySizeBytes);
+    }
+
+    getMemory() {
+        return this.memory;
+    }
+
+    addDisk(disk) {
+        this.disks.push(disk);
+    }
+
+    getDiskCount() {
+        return this.disks.length;
+    }
+
+    getDisk(diskIdx) {
+        return this.disks[diskIdx];
+    }
+
+    async runSafe() {
+        try {
+            await this.run()
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    async run() {
+        this.wabt = await wabt();
+        await this.start()
+        let badIrq = false;
+        while (!badIrq) {
+            badIrq = await this.step()
+            this.clearStack()
+        }
+        this.stop();
+    }
+
+    irq() {
+        return true;
+    }
+
+    async step() {
+        if(!this.irq())
+            return true;
+        let pcs = this.memory.getReg(PC);
+        this.memory.setReg(this.memory.load8(this.memory.getReg(CODE), pcs), IR)
+        this.memory.setReg(pcs + 1, PC)
+        let ir = this.memory.getReg(IR);
+        let irCode = ir.toString(16).toUpperCase();
+        let irName = IR_MAP[irCode];
+        let irFunc = this.vm[`ir_${irName}`];
+        try {
+            return irFunc();
+        } catch (e) {
+            console.error(e);
+            return true;
+        }
+    }
+
+    clearStack() {
+
+    }
+
+    stop() {
+        this.saveRegisters()
+    }
+
+    async start() {
+        this.memory.setReg(0, IPT)
+        this.memory.setReg(0, SP)
+        this.memory.setReg(this.memory.load32(1), P)
+        this.restoreRegisters()
+
+        const wastCode = await readFile(path.join(process.cwd(), 'core.wat'), 'utf-8')
+        const parsedModule = this.wabt.parseWat('core.wat', wastCode);
+        const { buffer } = parsedModule.toBinary({ log: false, canonicalize_lebs: true });
+
+        const wasmModule = await WebAssembly.compile(buffer);
+        const wasmInstance = await WebAssembly.instantiate(wasmModule, {
+            env: {
+                memory: this.memory.memory,
+                log_debug: function (id, value) {
+                    const hexVal = "0x" + (value >>> 0).toString(16).toUpperCase();
+                    console.log(`   [Wasm Debug ${id}] output: ${hexVal}`);
+                }
+        }});
+
+        this.vm = wasmInstance.exports;
+        this.vm.init_vm(this.memory.totalPages, AStackSize)
+    }
+
+    saveRegisters() {
+        this.memory.store32(1, this.memory.getReg(P))
+        this.saveStack();
+        this.memory.store32(this.memory.getReg(P), this.memory.getReg(G))
+        this.memory.store32(this.memory.getReg(P) + 1, this.memory.getReg(L))
+        this.memory.store32(this.memory.getReg(P) + 2, this.memory.getReg(PC))
+        this.memory.store32(this.memory.getReg(P) + 3, this.memory.getReg(M))
+        this.memory.store32(this.memory.getReg(P) + 4, this.memory.getReg(S))
+    }
+
+    restoreRegisters() {
+        this.memory.store32(0, this.memory.getReg(P))
+        this.memory.setReg(this.memory.load32(this.memory.getReg(P)), G)
+        this.memory.setReg(this.memory.load32(this.memory.getReg(G)), F)
+        this.memory.setReg(this.memory.getReg(F), CODE)
+        this.memory.setReg(this.memory.load32(this.memory.getReg(P) + 1), L)
+        this.memory.setReg(this.memory.load32(this.memory.getReg(P) + 2), PC)
+        this.memory.setReg(this.memory.load32(this.memory.getReg(P) + 3), M)
+        this.memory.setReg(this.memory.load32(this.memory.getReg(P) + 4), S)
+        this.memory.setReg(this.memory.load32(this.memory.getReg(P) + 5), H)
+        this.memory.setReg(this.memory.getReg(H) - AStackSize + 1, H)
+        this.restoreStack()
+    }
+
+    saveStack() {
+        let i = this.memory.getReg(S);
+        while (this.memory.getReg(SP) !== 0) {
+            let s = this.memory.getReg(S)
+            this.memory.store32(s, this.pop());
+            this.memory.setReg(s + 1, S)
+        }
+        this.memory.store32(this.memory.getReg(S),  this.memory.getReg(S) - i);
+        this.memory.setReg(this.memory.getReg(S) + 1, S);
+    }
+
+    restoreStack() {
+        this.memory.setReg(this.memory.getReg(S) - 1, S)
+        let i = this.memory.load32(this.memory.getReg(S))
+        if (i > AStackSize) {
+            this.memory.setReg(0x4C, IPT)
+            i = AStackSize
+        }
+        while (i-- > 0) {
+            this.memory.setReg(this.memory.getReg(S) - 1, S)
+            this.push(this.memory.load32(this.memory.getReg(S)))
+        }
+    }
+
+    push(i32) {
+        let sp = this.memory.getReg(SP)
+        if (sp <= 0 && sp < AStackSize) {
+            this.memory.setReg(i32, STACK + sp)
+            this.memory.setReg(sp + 1, SP)
+        } else {
+            this.memory.setReg(0x4C, IPT)
+        }
+    }
+
+    pop() {
+        let sp = this.memory.getReg(SP);
+        if (sp > 0) {
+            sp = sp - 1; // Сначала уменьшаем индекс (аналог --sp)
+            let val = this.memory.getReg(STACK + sp); // Читаем правильный верхний элемент
+            this.memory.setReg(sp, SP); // Сохраняем новый уменьшенный SP
+            return val;
+        }
+        this.memory.setReg(0x4C, IPT);
+        return 0;
+    }
+}
+
+const IR_MAP = {
+    "0": "LI0",
+    "1": "LI1",
+    "2": "LI2",
+    "3": "LI3",
+    "4": "LI4",
+    "5": "LI5",
+    "6": "LI6",
+    "7": "LI7",
+    "8": "LI8",
+    "9": "LI9",
+    "10": "LIB",
+    "11": "LID",
+    "12": "LIW",
+    "13": "LIN",
+    "14": "LLA",
+    "15": "LGA",
+    "16": "LSA",
+    "17": "LEA",
+    "18": "JFLC",
+    "19": "JFL",
+    "20": "LLW",
+    "21": "LGW",
+    "22": "LEW",
+    "23": "LSW",
+    "24": "LLW4",
+    "25": "LLW5",
+    "26": "LLW6",
+    "27": "LLW7",
+    "28": "LLW8",
+    "29": "LLW9",
+    "30": "SLW",
+    "31": "SGW",
+    "32": "SEW",
+    "33": "SSW",
+    "34": "SLW4",
+    "35": "SLW5",
+    "36": "SLW6",
+    "37": "SLW7",
+    "38": "SLW8",
+    "39": "SLW9",
+    "40": "LXB",
+    "41": "LXW",
+    "42": "LGW2",
+    "43": "LGW3",
+    "44": "LGW4",
+    "45": "LGW5",
+    "46": "LGW6",
+    "47": "LGW7",
+    "48": "LGW8",
+    "49": "LGW9",
+    "50": "SXB",
+    "51": "SXW",
+    "52": "SGW2",
+    "53": "SGW3",
+    "54": "SGW4",
+    "55": "SGW5",
+    "56": "SGW6",
+    "57": "SGW7",
+    "58": "SGW8",
+    "59": "SGW9",
+    "60": "LSW0",
+    "61": "LSW1",
+    "62": "LSW2",
+    "63": "LSW3",
+    "64": "LSW4",
+    "65": "LSW5",
+    "66": "LSW6",
+    "67": "LSW7",
+    "68": "LSW8",
+    "69": "LSW9",
+    "70": "SSW0",
+    "71": "SSW1",
+    "72": "SSW2",
+    "73": "SSW3",
+    "74": "SSW4",
+    "75": "SSW5",
+    "76": "SSW6",
+    "77": "SSW7",
+    "78": "SSW8",
+    "79": "SSW9",
+    "80": "*IOR",
+    "81": "QUIT",
+    "82": "GETM",
+    "83": "SETM",
+    "84": "TRAP",
+    "85": "TRA",
+    "86": "TR",
+    "87": "IDLE",
+    "88": "ADD",
+    "89": "SUB",
+    "90": "IO0",
+    "91": "IO1",
+    "92": "IO2",
+    "93": "IO3",
+    "94": "IO4",
+    "95": "*ARRCMP",
+    "96": "*WM",
+    "97": "*BM",
+    "98": "FADD",
+    "99": "FSUB",
+    "A": "LI0A",
+    "B": "LI0B",
+    "C": "LI0C",
+    "D": "LI0D",
+    "E": "LI0E",
+    "F": "LI0F",
+    "1A": "JFSC",
+    "1B": "JFS",
+    "1C": "JBLC",
+    "1D": "JBL",
+    "1E": "JBSC",
+    "1F": "JBS",
+    "2A": "LLW0A",
+    "2B": "LLW0B",
+    "2C": "LLW0C",
+    "2D": "LLW0D",
+    "2E": "LLW0E",
+    "2F": "LLW0F",
+    "3A": "SLW0A",
+    "3B": "SLW0B",
+    "3C": "SLW0C",
+    "3D": "SLW0D",
+    "3E": "SLW0E",
+    "3F": "SLW0F",
+    "4A": "LGW0A",
+    "4B": "LGW0B",
+    "4C": "LGW0C",
+    "4D": "LGW0D",
+    "4E": "LGW0E",
+    "4F": "LGW0F",
+    "5A": "SGW0A",
+    "5B": "SGW0B",
+    "5C": "SGW0C",
+    "5D": "SGW0D",
+    "5E": "SGW0E",
+    "5F": "SGW0F",
+    "6A": "LSW0A",
+    "6B": "LSW0B",
+    "6C": "LSW0C",
+    "6D": "LSW0D",
+    "6E": "LSW0E",
+    "6F": "LSW0F",
+    "7A": "SSW0A",
+    "7B": "SSW0B",
+    "7C": "SSW0C",
+    "7D": "SSW0D",
+    "7E": "SSW0E",
+    "7F": "SSW0F",
+    "8A": "MUL",
+    "8B": "DIV",
+    "8C": "SHL",
+    "8D": "SHR",
+    "8E": "ROL",
+    "8F": "ROR",
+    "9A": "FMUL",
+    "9B": "FDIV",
+    "9C": "FCMP",
+    "9D": "FABS",
+    "9E": "FNEG",
+    "9F": "FFCT",
+    "A0": "LSS",
+    "A1": "LEQ",
+    "A2": "GTR",
+    "A3": "GEQ",
+    "A4": "EQU",
+    "A5": "NEQ",
+    "A6": "ABS",
+    "A7": "NEG",
+    "A8": "OR",
+    "A9": "AND",
+    "AA": "XOR",
+    "AB": "BIC",
+    "AC": "IN",
+    "AD": "BIT",
+    "AE": "NOT",
+    "AF": "MOD",
+    "B0": "DECS",
+    "B1": "DROP",
+    "B2": "LODFV",
+    "B3": "STORE",
+    "B4": "STOFV",
+    "B5": "COPT",
+    "B6": "CPCOP",
+    "B7": "PCOP",
+    "B8": "*FOR1",
+    "B9": "*FOR2",
+    "BA": "*ENTC",
+    "BB": "*XIT",
+    "BC": "ADDPC",
+    "BD": "JMP",
+    "BE": "ORJP",
+    "BF": "ANDJP",
+    "C0": "MOVE",
+    "C1": "**CHKNIL",
+    "C2": "LSTA",
+    "C3": "COMP",
+    "C4": "GB",
+    "C5": "GB1",
+    "C6": "CHK",
+    "C7": "CHKZ",
+    "C8": "ALLOC",
+    "C9": "ENTR",
+    "CA": "RTN",
+    "CB": "NOP",
+    "CC": "CX",
+    "CD": "CI",
+    "CE": "CF",
+    "CF": "CL",
+    "D0": "CL0",
+    "D1": "CL1",
+    "D2": "CL2",
+    "D3": "CL3",
+    "D4": "CL4",
+    "D5": "CL5",
+    "D6": "CL6",
+    "D7": "CL7",
+    "D8": "CL8",
+    "D9": "CL9",
+    "DA": "CL0A",
+    "DB": "CL0B",
+    "DC": "CL0C",
+    "DD": "CL0D",
+    "DE": "CL0E",
+    "DF": "CL0F",
+    "E0": "INCL",
+    "E1": "EXCL",
+    "E2": "*INL",
+    "E3": "*QUOT",
+    "E4": "INC1",
+    "E5": "DEC1",
+    "E6": "INC",
+    "E7": "DEC",
+    "E8": "STOT",
+    "E9": "LODT",
+    "EA": "LXA",
+    "EB": "LPC",
+    "EC": "**BBU",
+    "ED": "**BBP",
+    "EE": "**BBLT",
+    "EF": "**PDX",
+    "F0": "SWAP",
+    "F1": "LPA",
+    "F2": "LPW",
+    "F3": "SPW",
+    "F4": "SSWU",
+    "F5": "**RCHK",
+    "F6": "**RCHZ",
+    "F7": "**CM",
+    "F8": "*CHKBX",
+    "F9": "*BMG",
+    "FA": "ACTIV",
+    "FB": "USR",
+    "FC": "SYS",
+    "FD": "**NII",
+    "FE": "DOT",
+    "FF": "INVLD"
+}

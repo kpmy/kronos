@@ -1,0 +1,11 @@
+{
+  "name": "kronos-wasm-js",
+  "version": "0.0.1",
+  "main": "index.js",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "wabt": "^1.0.39"
+  }
+}

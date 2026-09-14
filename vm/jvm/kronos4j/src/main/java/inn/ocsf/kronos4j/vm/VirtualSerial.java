@@ -9,7 +9,7 @@ public class VirtualSerial {
     private final Logger log =  LoggerFactory.getLogger(VirtualSerial.class);
 
     boolean inpIptEnabled = true;
-    boolean outIptEnabled = true;
+    boolean outIptEnabled = false;
 
     public VirtualSerial() {
 

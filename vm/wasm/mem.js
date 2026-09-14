@@ -67,4 +67,8 @@ export class VirtualMemory {
     getReg(reg) {
         return this.reg32[reg]
     }
+
+    isOutOfRange() {
+        return false; //TODO maybe register, should not be called
+    }
 }

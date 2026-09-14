@@ -4,6 +4,15 @@
   (import "env" "log_debug" (func $log_debug (param i32 i32)))
   ;; Импортируем функцию обработки ввода-вывода из JavaScript-хоста с одним параметром
   (import "env" "io_host_call" (func $io_host_call (param i32)))
+  ;; Импортируем функцию переключения процессов из JavaScript-хоста
+  ;; Принимает два параметра: i (извлеченный первым) и значение из второго pop()
+  (import "env" "tra_host_call" (func $tra_host_call (param i32 i32)))
+  ;; Импортируем функцию печати 32-битного числа в шестнадцатеричном формате из JS-хоста
+  (import "env" "sys_print_hex" (func $sys_print_hex (param i32)))
+  ;; Импортируем функцию сохранения стека из JavaScript-хоста
+  (import "env" "save_stack_host_call" (func $save_stack_host_call))
+  ;; Импортируем функцию восстановления стека из JavaScript-хоста
+  (import "env" "restore_stack_host_call" (func $restore_stack_host_call))
 
   ;; Абсолютные адреса регистров в WebAssembly.Memory (База + Индекс * 4)
   (global $IPT_ADDR (mut i32)
@@ -470,7 +479,7 @@
 
   ;; Функция LSW: модифицирует верхнее значение стека, прибавляя (ir & 0xF),
   ;; проверяет границы памяти, загружает слово (или 0 при ошибке) и пишет на стек.
-  (func $ir_LSW (export "ir_LSW")
+  (func $int_LSW
     (local $ir i32)
     (local $sp_idx i32)
     (local $top_val_addr i32)
@@ -554,37 +563,83 @@
   ;; 16 пустых экспортных оберток для вашего JS-диспетчера
   ;; ========================================================
   (func (export "ir_LSW0")
-    (call $ir_LSW))
+    (call $int_LSW))
   (func (export "ir_LSW1")
-    (call $ir_LSW))
+    (call $int_LSW))
   (func (export "ir_LSW2")
-    (call $ir_LSW))
+    (call $int_LSW))
   (func (export "ir_LSW3")
-    (call $ir_LSW))
+    (call $int_LSW))
   (func (export "ir_LSW4")
-    (call $ir_LSW))
+    (call $int_LSW))
   (func (export "ir_LSW5")
-    (call $ir_LSW))
+    (call $int_LSW))
   (func (export "ir_LSW6")
-    (call $ir_LSW))
+    (call $int_LSW))
   (func (export "ir_LSW7")
-    (call $ir_LSW))
+    (call $int_LSW))
   (func (export "ir_LSW8")
-    (call $ir_LSW))
+    (call $int_LSW))
   (func (export "ir_LSW9")
-    (call $ir_LSW))
-  (func (export "ir_LSWA")
-    (call $ir_LSW))
-  (func (export "ir_LSWB")
-    (call $ir_LSW))
-  (func (export "ir_LSWC")
-    (call $ir_LSW))
-  (func (export "ir_LSWD")
-    (call $ir_LSW))
-  (func (export "ir_LSWE")
-    (call $ir_LSW))
-  (func (export "ir_LSWF")
-    (call $ir_LSW))
+    (call $int_LSW))
+  (func (export "ir_LSW0A")
+    (call $int_LSW))
+  (func (export "ir_LSW0B")
+    (call $int_LSW))
+  (func (export "ir_LSW0C")
+    (call $int_LSW))
+  (func (export "ir_LSW0D")
+    (call $int_LSW))
+  (func (export "ir_LSW0E")
+    (call $int_LSW))
+  (func (export "ir_LSW0F")
+    (call $int_LSW))
+
+  ;; ========================================================
+  ;; Инструкция LSW (Опкод 0x23) — Загрузка слова по адресу со смещением
+  ;; ========================================================
+  (func (export "ir_LSW")
+    (local $base_word_addr i32)  ;; Базовый адрес в словах из pop()
+    (local $offset i32)          ;; Смещение из next() (в словах)
+    (local $target_byte_addr i32) ;; Итоговый байтовый адрес для Wasm
+    (local $max_safe_byte i32)
+    (local $loaded_word i32)
+
+    ;; 1. Извлекаем базовый адрес со стека выражений: pop()
+    (local.set $base_word_addr (call $pop))
+
+    ;; 2. Читаем байт смещения аргумента из потока кода: next()
+    (local.set $offset (call $next))
+
+    ;; 3. Вычисляем физический байтовый адрес: (base + offset) * 4
+    (local.set $target_byte_addr
+      (i32.mul
+        (i32.add (local.get $base_word_addr) (local.get $offset))
+        (i32.const 4)
+      )
+    )
+
+    ;; 4. МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    (if (i32.or
+          (i32.lt_s (local.get $target_byte_addr) (i32.const 0))
+          (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte))
+        )
+      ;; --- ВЕТКА TRUE: Выход за границы ---
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 3))
+        (local.set $loaded_word (i32.const 0))
+      )
+      ;; --- ВЕТКА FALSE: Безопасно читаем 32-битное слово ---
+      (else
+        (local.set $loaded_word (i32.load (local.get $target_byte_addr)))
+      )
+    )
+
+    ;; 5. Кладем прочитанное значение на стек выражений
+    (call $push (local.get $loaded_word))
+  )
 
   ;; ========================================================
   ;; Обновленная инструкция COPT (Опкод 0xB5) — Чистый вызов
@@ -742,6 +797,44 @@
           (i32.add
             (local.get $current_pc)
             (i32.const 1))))))
+
+  ;; ========================================================
+  ;; Инструкция JFLC (Опкод 0x18) — Длинный условный переход вперед, если 0
+  ;; ========================================================
+  (func (export "ir_JFLC")
+    (local $cond i32)
+    (local $pc1 i32)
+    (local $current_pc i32)
+
+    ;; 1. Вытаскиваем значение с вершины стека выражений
+    (local.set $cond (call $pop))
+
+    ;; 2. Проверяем условие: if (pop() == 0)
+    (if (i32.eqz (local.get $cond))
+      ;; --- ВЕТКА TRUE (выполняем длинный переход вперед) ---
+      (then
+        ;; int pc1 = next2(); (прочитает 2 байта аргумента и сделает pc += 2)
+        (local.set $pc1 (call $next2))
+
+        ;; pc += pc1;
+        (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+        (i32.store
+          (global.get $PC_ADDR)
+          (i32.add (local.get $current_pc) (local.get $pc1))
+        )
+      )
+      ;; --- ВЕТКА FALSE (else) ---
+      (else
+        ;; pc += 2; (просто пропускаем 2 байта аргумента pc1, вставая на следующую инструкцию)
+        (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+        (i32.store
+          (global.get $PC_ADDR)
+          (i32.add (local.get $current_pc) (i32.const 2))
+        )
+      )
+    )
+  )
+
 
   ;; ========================================================
   ;; Инструкция STOT (Опкод 0xE8) — Сохранение на процедурный стек
@@ -1138,7 +1231,7 @@
   ;; ========================================================
   ;; Единая внутренняя логика CL (Call Local)
   ;; ========================================================
-  (func $ir_CL
+  (func $int_CL
     (local $s i32)
     (local $h i32)
     (local $ir i32)
@@ -1211,37 +1304,37 @@
   ;; 16 пустых экспортных оберток для вашего JS-диспетчера
   ;; ========================================================
   (func (export "ir_CL0")
-    (call $ir_CL))
+    (call $int_CL))
   (func (export "ir_CL1")
-    (call $ir_CL))
+    (call $int_CL))
   (func (export "ir_CL2")
-    (call $ir_CL))
+    (call $int_CL))
   (func (export "ir_CL3")
-    (call $ir_CL))
+    (call $int_CL))
   (func (export "ir_CL4")
-    (call $ir_CL))
+    (call $int_CL))
   (func (export "ir_CL5")
-    (call $ir_CL))
+    (call $int_CL))
   (func (export "ir_CL6")
-    (call $ir_CL))
+    (call $int_CL))
   (func (export "ir_CL7")
-    (call $ir_CL))
+    (call $int_CL))
   (func (export "ir_CL8")
-    (call $ir_CL))
+    (call $int_CL))
   (func (export "ir_CL9")
-    (call $ir_CL))
-  (func (export "ir_CLA")
-    (call $ir_CL))
-  (func (export "ir_CLB")
-    (call $ir_CL))
-  (func (export "ir_CLC")
-    (call $ir_CL))
-  (func (export "ir_CLD")
-    (call $ir_CL))
-  (func (export "ir_CLE")
-    (call $ir_CL))
-  (func (export "ir_CLF")
-    (call $ir_CL))
+    (call $int_CL))
+  (func (export "ir_CL0A")
+    (call $int_CL))
+  (func (export "ir_CL0B")
+    (call $int_CL))
+  (func (export "ir_CL0C")
+    (call $int_CL))
+  (func (export "ir_CL0D")
+    (call $int_CL))
+  (func (export "ir_CL0E")
+    (call $int_CL))
+  (func (export "ir_CL0F")
+    (call $int_CL))
 
   ;; ========================================================
   ;; Инструкция ENTR (Опкод 0xC9) — Вход в процедуру (выделение кадра)
@@ -1353,7 +1446,7 @@
   ;; ========================================================
   ;; Единая внутренняя логика SLW (Store Local Word)
   ;; ========================================================
-  (func $ir_SLW
+  (func $int_SLW
     (local $ir i32)
     (local $l i32)
     (local $val i32)
@@ -1397,29 +1490,29 @@
   ;; 12 экспортных оберток для вашего JS-диспетчера (SLW4..SLWF)
   ;; ========================================================
   (func (export "ir_SLW4")
-    (call $ir_SLW))
+    (call $int_SLW))
   (func (export "ir_SLW5")
-    (call $ir_SLW))
+    (call $int_SLW))
   (func (export "ir_SLW6")
-    (call $ir_SLW))
+    (call $int_SLW))
   (func (export "ir_SLW7")
-    (call $ir_SLW))
+    (call $int_SLW))
   (func (export "ir_SLW8")
-    (call $ir_SLW))
+    (call $int_SLW))
   (func (export "ir_SLW9")
-    (call $ir_SLW))
+    (call $int_SLW))
   (func (export "ir_SLW0A")
-    (call $ir_SLW))
+    (call $int_SLW))
   (func (export "ir_SLW0B")
-    (call $ir_SLW))
+    (call $int_SLW))
   (func (export "ir_SLW0C")
-    (call $ir_SLW))
+    (call $int_SLW))
   (func (export "ir_SLW0D")
-    (call $ir_SLW))
+    (call $int_SLW))
   (func (export "ir_SLW0E")
-    (call $ir_SLW))
+    (call $int_SLW))
   (func (export "ir_SLW0F")
-    (call $ir_SLW))
+    (call $int_SLW))
 
   ;; ========================================================
   ;; Инструкция LIW (Опкод 0x12) — Теперь через вызов $next4
@@ -1658,7 +1751,7 @@
   ;; ========================================================
   ;; Единая внутренняя логика SSW (Store Stack Word)
   ;; ========================================================
-  (func $ir_SSW
+  (func $int_SSW
     (local $ir i32)
     (local $value_to_store i32) ;; Значение, извлеченное первым (i)
     (local $base_word_addr i32) ;; Базовый адрес в словах, извлеченный вторым
@@ -1724,37 +1817,37 @@
   ;; 16 экспортных оберток для вашего JS-диспетчера (SSW0..SSWF)
   ;; ========================================================
   (func (export "ir_SSW0")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW1")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW2")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW3")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW4")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW5")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW6")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW7")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW8")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW9")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW0A")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW0B")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW0C")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW0D")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW0E")
-    (call $ir_SSW))
+    (call $int_SSW))
   (func (export "ir_SSW0F")
-    (call $ir_SSW))
+    (call $int_SSW))
 
   ;; ========================================================
   ;; Инструкция NEQ (Опкод 0xA5) — Сравнение на неравенство
@@ -1814,7 +1907,7 @@
   ;; ========================================================
   ;; Единая внутренняя логика SGW (Store Global Word)
   ;; ========================================================
-  (func $ir_SGW
+  (func $int_SGW
     (local $ir i32)
     (local $g i32)
     (local $val i32)
@@ -1880,33 +1973,33 @@
   ;; 14 экспортных оберток для вашего JS-диспетчера (SGW2..SGWF)
   ;; ========================================================
   (func (export "ir_SGW2")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW3")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW4")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW5")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW6")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW7")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW8")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW9")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW0A")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW0B")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW0C")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW0D")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW0E")
-    (call $ir_SGW))
+    (call $int_SGW))
   (func (export "ir_SGW0F")
-    (call $ir_SGW))
+    (call $int_SGW))
 
   ;; ========================================================
   ;; Инструкция LIN (Опкод 0x13) — Загрузка Nil на стек
@@ -1955,7 +2048,7 @@
   ;; ========================================================
   ;; Единая внутренняя логика LGW (Load Global Word)
   ;; ========================================================
-  (func $ir_LGW
+  (func $int_LGW
     (local $ir i32)
     (local $g i32)
     (local $offset i32)
@@ -2024,33 +2117,33 @@
   ;; 14 экспортных оберток для вашего JS-диспетчера (LGW2..LGWF)
   ;; ========================================================
   (func (export "ir_LGW2")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW3")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW4")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW5")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW6")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW7")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW8")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW9")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW0A")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW0B")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW0C")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW0D")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW0E")
-    (call $ir_LGW))
+    (call $int_LGW))
   (func (export "ir_LGW0F")
-    (call $ir_LGW))
+    (call $int_LGW))
 
   ;; ========================================================
   ;; Инструкция LSTA (Опкод 0xC2) — Загрузка адреса строки
@@ -3088,6 +3181,118 @@
                 (i32.const 0))))))))
 
   ;; ========================================================
+  ;; Инструкция INCL (Опкод 0xE0) — Включить бит в длинное множество
+  ;; ========================================================
+  (func (export "ir_INCL")
+    (local $i i32) (local $j i32)
+    (local $target_word i32) (local $bit_pos i32)
+    (local $target_byte_addr i32) (local $max_safe_byte i32)
+    (local $current_val i32) (local $mask i32)
+
+    (local.set $i (call $pop))
+    (local.set $j (call $pop))
+
+    ;; j_target = j + (i >> 5)
+    (local.set $target_word (i32.add (local.get $j) (i32.shr_s (local.get $i) (i32.const 5))))
+    ;; bit_pos = i & 0x1F
+    (local.set $bit_pos (i32.and (local.get $i) (i32.const 0x1F)))
+
+    (local.set $target_byte_addr (i32.mul (local.get $target_word) (i32.const 4)))
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    ;; МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (if (i32.or (i32.lt_s (local.get $target_byte_addr) (i32.const 0)) (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)))
+      (else
+        (local.set $current_val (i32.load (local.get $target_byte_addr)))
+        (local.set $mask (i32.shl (i32.const 1) (local.get $bit_pos)))
+        ;; mem(target) = current_val | (1 << bit_pos)
+        (i32.store (local.get $target_byte_addr) (i32.or (local.get $current_val) (local.get $mask)))
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция EXCL (Опкод 0xE1) — Исключить бит из длинного множества
+  ;; ========================================================
+  (func (export "ir_EXCL")
+    (local $i i32) (local $j i32)
+    (local $target_word i32) (local $bit_pos i32)
+    (local $target_byte_addr i32) (local $max_safe_byte i32)
+    (local $current_val i32) (local $not_mask i32)
+
+    (local.set $i (call $pop))
+    (local.set $j (call $pop))
+
+    (local.set $target_word (i32.add (local.get $j) (i32.shr_s (local.get $i) (i32.const 5))))
+    (local.set $bit_pos (i32.and (local.get $i) (i32.const 0x1F)))
+
+    (local.set $target_byte_addr (i32.mul (local.get $target_word) (i32.const 4)))
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    ;; МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (if (i32.or (i32.lt_s (local.get $target_byte_addr) (i32.const 0)) (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)))
+      (else
+        (local.set $current_val (i32.load (local.get $target_byte_addr)))
+        ;; ~mask реализуем как (1 << bit_pos) ^ -1
+        (local.set $not_mask (i32.xor (i32.shl (i32.const 1) (local.get $bit_pos)) (i32.const -1)))
+        ;; mem(target) = current_val & ~mask
+        (i32.store (local.get $target_byte_addr) (i32.and (local.get $current_val) (local.get $not_mask)))
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция INL (Опкод 0xE2) — Проверить вхождение в длинное множество
+  ;; ========================================================
+  (func (export "ir_INL")
+    (local $k i32) (local $j i32) (local $i i32)
+    (local $target_word i32) (local $bit_pos i32)
+    (local $target_byte_addr i32) (local $max_safe_byte i32)
+    (local $word_val i32) (local $mask i32)
+
+    (local.set $k (call $pop))
+    (local.set $j (call $pop))
+    (local.set $i (call $pop))
+
+    ;; Проверяем: if (i < 0 || i >= k)
+    (if (i32.or (i32.lt_s (local.get $i) (i32.const 0)) (i32.ge_s (local.get $i) (local.get $k)))
+      (then
+        (call $push (i32.const 0))
+      )
+      (else
+        (local.set $target_word (i32.add (local.get $j) (i32.shr_s (local.get $i) (i32.const 5))))
+        (local.set $bit_pos (i32.and (local.get $i) (i32.const 0x1F)))
+
+        (local.set $target_byte_addr (i32.mul (local.get $target_word) (i32.const 4)))
+        (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+        ;; МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ ПЕРЕД ЧТЕНИЕМ
+        (if (i32.or (i32.lt_s (local.get $target_byte_addr) (i32.const 0)) (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte)))
+          (then
+            (i32.store (global.get $IPT_ADDR) (i32.const 3))
+            (local.set $word_val (i32.const 0))
+          )
+          (else
+            (local.set $word_val (i32.load (local.get $target_byte_addr)))
+          )
+        )
+
+        (local.set $mask (i32.shl (i32.const 1) (local.get $bit_pos)))
+
+        ;; push(((1 << bit_pos) & word_val) != 0 ? 1 : 0)
+        (call $push
+          (i32.ne
+            (i32.and (local.get $mask) (local.get $word_val))
+            (i32.const 0)
+          )
+        )
+      )
+    )
+  )
+
+  ;; ========================================================
   ;; Инструкция GB1 (Опкод 0xC5) — Загрузка слова по адресу из регистра L
   ;; ========================================================
   (func (export "ir_GB1")
@@ -3214,6 +3419,1533 @@
       (local.get $i)))
     
     
-    
-    
+      ;; ========================================================
+      ;; Инструкция CI (Опкод 0xCD) — Вызов процедуры промежуточного уровня
+      ;; ========================================================
+      (func (export "ir_CI")
+        (local $s i32)
+        (local $h i32)
+        (local $i i32)
+        (local $f i32)
+        (local $static_link i32)
+        (local $pc_target_bytes i32)
+        (local $max_safe_byte i32)
+
+        ;; 1. Читаем текущие значения S и H для проверки лимитов процедурного стека
+        (local.set $s (i32.load (global.get $S_ADDR)))
+        (local.set $h (i32.load (global.get $H_ADDR)))
+
+        ;; 2. Проверяем переполнение: if (s + 4 > h)
+        (if (i32.gt_s (i32.add (local.get $s) (i32.const 4)) (local.get $h))
+          ;; --- ВЕТКА TRUE: Переполнение процедурного стека ---
+          (then
+            ;; pc--; ipt = 0x40; (Откатываемся на начало инструкции CI)
+            (i32.store (global.get $PC_ADDR) (i32.sub (i32.load (global.get $PC_ADDR)) (i32.const 1)))
+            (i32.store (global.get $IPT_ADDR) (i32.const 0x40))
+          )
+          ;; --- ВЕТКА FALSE: Безопасный вызов ---
+          (else
+            ;; int i = next(); (Считываем смещение, PC сдвигается на 1)
+            (local.set $i (call $next))
+
+            ;; Извлекаем статическую ссылку со стека выражений: pop()
+            (local.set $static_link (call $pop))
+
+            ;; mark(pop(), false); -> Передаем извлеченный адрес кадра и флаг extern = 0
+            (call $mark (local.get $static_link) (i32.const 0))
+
+            ;; Читаем актуальное значение регистра F
+            (local.set $f (i32.load (global.get $F_ADDR)))
+
+            ;; Вычисляем байтовый физический адрес таблицы переходов: (f + i) * 4
+            (local.set $pc_target_bytes (i32.mul (i32.add (local.get $f) (local.get $i)) (i32.const 4)))
+            (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+            ;; МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ: Проверяем адрес перед чтением mem(f + i)
+            (if (i32.or
+                  (i32.lt_s (local.get $pc_target_bytes) (i32.const 0))
+                  (i32.gt_s (local.get $pc_target_bytes) (local.get $max_safe_byte))
+                )
+              (then
+                (i32.store (global.get $IPT_ADDR) (i32.const 3))
+              )
+              (else
+                ;; pc = mem(f + i); -> Устанавливаем новый адрес счетчика команд
+                (i32.store (global.get $PC_ADDR) (i32.load (local.get $pc_target_bytes)))
+              )
+            )
+          )
+        )
+      )
+
+  ;; ========================================================
+  ;; Инструкция SXB (Опкод 0x50) — Запись 1 байта по С-указателю
+  ;; ========================================================
+  (func (export "ir_SXB")
+    (local $k i32)  ;; Значение байта для записи, извлекается ПЕРВЫМ
+    (local $i i32)  ;; Байтовое смещение, извлекается ВТОРЫМ
+    (local $j i32)  ;; Базовый адрес в словах, извлекается ТРЕТЬИМ
+    (local $target_byte_addr i32)
+    (local $max_safe_byte i32)
+
+    ;; 1. Извлекаем параметры со стека выражений в строгом порядке Java
+    (local.set $k (call $pop))
+    (local.set $i (call $pop))
+    (local.set $j (call $pop))
+
+    ;; 2. Вычисляем точный физический байтовый адрес: (j * 4) + i
+    (local.set $target_byte_addr
+      (i32.add
+        (i32.mul (local.get $j) (i32.const 4))
+        (local.get $i)
+      )
+    )
+
+    ;; 3. МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ (для 1 байта)
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 1)))
+
+    (if (i32.or
+          (i32.lt_s (local.get $target_byte_addr) (i32.const 0))
+          (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte))
+        )
+      ;; --- ВЕТКА TRUE: Выход за границы ---
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 3))
+      )
+      ;; --- ВЕТКА FALSE: Нативно пишем 1 байт в память ---
+      (else
+        ;; i32.store8 запишет строго младший байт из регистра $k по указанному адресу
+        (i32.store8 (local.get $target_byte_addr) (local.get $k))
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция LSA (Опкод 0x16) — Прибавление константы к вершине стека
+  ;; ========================================================
+  (func (export "ir_LSA")
+    (local $sp_idx i32)       ;; Индекс вершины стека выражений (sp - 1)
+    (local $top_val_addr i32) ;; Физический адрес ячейки стека в памяти Wasm
+    (local $current_val i32)  ;; Текущее значение на вершине стека
+    (local $offset i32)       ;; Константа из next()
+
+    ;; 1. Находим sp - 1 (индекс верхнего элемента стека)
+    (local.set $sp_idx (i32.sub (i32.load (global.get $SP_ADDR)) (i32.const 1)))
+
+    ;; 2. Вычисляем физический байтовый адрес ячейки astack[sp-1] в памяти Wasm
+    (local.set $top_val_addr
+      (i32.add
+        (global.get $STACK_ADDR)
+        (i32.mul (local.get $sp_idx) (i32.const 4))
+      )
+    )
+
+    ;; 3. Читаем текущее значение с вершины стека
+    (local.set $current_val (i32.load (local.get $top_val_addr)))
+
+    ;; 4. Читаем байт аргумента из кода через наш готовый next()
+    (local.set $offset (call $next))
+
+    ;; 5. Складываем и перезаписываем вершину стека: astack[sp-1] += offset
+    (i32.store
+      (local.get $top_val_addr)
+      (i32.add (local.get $current_val) (local.get $offset))
+    )
+  )
+
+      ;; ========================================================
+      ;; Инструкция QUIT (Опкод 0x81) — Останов процессора
+      ;; ========================================================
+      (func (export "ir_QUIT")
+        ;; Записываем служебный код останова (например, 0xFF) в регистр прерывания IPT
+        (i32.store (global.get $IPT_ADDR) (i32.const 0xFF))
+      )
+
+  ;; ========================================================
+  ;; Инструкция LGA (Опкод 0x15) — Загрузка адреса глобальной переменной
+  ;; ========================================================
+  (func (export "ir_LGA")
+    (local $g_word i32)
+    (local $offset i32)
+
+    ;; 1. Читаем текущее значение регистра G (в словах) из памяти
+    (local.set $g_word (i32.load (global.get $G_ADDR)))
+
+    ;; 2. int offset = next(); (Считывает смещение и сдвигает PC на 1)
+    (local.set $offset (call $next))
+
+    ;; 3. push(g + offset); (Складываем словесные адреса и кладем на стек)
+    (call $push (i32.add (local.get $g_word) (local.get $offset)))
+  )
+
+  ;; ========================================================
+  ;; Инструкция TRA (Опкод 0x85) — Передача управления процессу (Хост-бинд)
+  ;; ========================================================
+  (func (export "ir_TRA")
+    (local $i i32)
+    (local $val i32)
+
+    ;; 1. Извлекаем параметры со стека выражений в строгом порядке Java
+    (local.set $i (call $pop))
+    (local.set $val (call $pop))
+
+    ;; 2. Передаем управление на сторону JavaScript-хоста
+    (call $tra_host_call (local.get $i) (local.get $val))
+  )
+
+  ;; ========================================================
+  ;; Инструкция LLW (Опкод 0x20) — Загрузка локальной переменной со смещением
+  ;; ========================================================
+  (func (export "ir_LLW")
+    (local $l i32)            ;; Регистр L (в словах)
+    (local $offset i32)       ;; Смещение из next() (в словах)
+    (local $target_byte_addr i32) ;; Итоговый байтовый адрес для Wasm
+    (local $max_safe_byte i32)
+    (local $loaded_word i32)
+
+    ;; 1. Читаем текущий указатель локального кадра L
+    (local.set $l (i32.load (global.get $L_ADDR)))
+
+    ;; 2. Читаем байт смещения аргумента из потока кода: int offset = next();
+    (local.set $offset (call $next))
+
+    ;; 3. Вычисляем физический байтовый адрес: (l + offset) * 4
+    (local.set $target_byte_addr
+      (i32.mul
+        (i32.add (local.get $l) (local.get $offset))
+        (i32.const 4)
+      )
+    )
+
+    ;; 4. МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    (if (i32.or
+          (i32.lt_s (local.get $target_byte_addr) (i32.const 0))
+          (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte))
+        )
+      ;; --- ВЕТКА TRUE: Выход за границы ---
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 3))
+        (local.set $loaded_word (i32.const 0))
+      )
+      ;; --- ВЕТКА FALSE: Безопасно читаем 32-битное слово ---
+      (else
+        (local.set $loaded_word (i32.load (local.get $target_byte_addr)))
+      )
+    )
+
+    ;; 5. Кладем прочитанное значение на стек выражений
+    (call $push (local.get $loaded_word))
+  )
+
+  ;; ========================================================
+  ;; Инструкция CHKNIL (Опкод 0xC1) — Проверка вершины стека на NIL
+  ;; ========================================================
+  (func (export "ir_CHKNIL")
+    (local $sp_idx i32)
+    (local $top_val_addr i32)
+    (local $top_val i32)
+
+    ;; 1. Находим sp - 1 (индекс верхнего элемента стека)
+    (local.set $sp_idx (i32.sub (i32.load (global.get $SP_ADDR)) (i32.const 1)))
+
+    ;; 2. Вычисляем физический байтовый адрес ячейки astack[sp-1] в памяти Wasm
+    (local.set $top_val_addr
+      (i32.add
+        (global.get $STACK_ADDR)
+        (i32.mul (local.get $sp_idx) (i32.const 4))
+      )
+    )
+
+    ;; 3. Читаем значение с вершины стека
+    (local.set $top_val (i32.load (local.get $top_val_addr)))
+
+    ;; 4. Проверяем: if (top_val == Nil), где Nil = 0x7FFFFF80
+    (if (i32.eq (local.get $top_val) (i32.const 0x7FFFFF80))
+      (then
+        ;; Взводим код прерывания IPT = 3 (согласно вашему решению)
+        (i32.store (global.get $IPT_ADDR) (i32.const 3))
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция SSW (Опкод 0x33) — Сохранение слова по адресу со смещением
+  ;; ========================================================
+  (func (export "ir_SSW")
+    (local $value_to_store i32) ;; Значение, извлеченное первым (i)
+    (local $offset i32)         ;; Смещение из инструкции (next())
+    (local $base_word_addr i32) ;; Базовый адрес в словах, извлеченный вторым
+    (local $target_byte_addr i32) ;; Итоговый физический байтовый адрес
+    (local $max_safe_byte i32)
+
+    ;; 1. Извлекаем первое значение со стека выражений (то, ЧТО сохраняем)
+    (local.set $value_to_store (call $pop))
+
+    ;; 2. Читаем байт смещения аргумента из потока кода: int offset = next();
+    (local.set $offset (call $next))
+
+    ;; 3. Извлекаем второе значение со стека выражений (то, КУДА сохраняем - база в словах)
+    (local.set $base_word_addr (call $pop))
+
+    ;; 4. Вычисляем итоговый адрес в байтах для WebAssembly: (база + offset) * 4
+    (local.set $target_byte_addr
+      (i32.mul
+        (i32.add (local.get $base_word_addr) (local.get $offset))
+        (i32.const 4)
+      )
+    )
+
+    ;; 5. МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    (if (i32.or
+          (i32.lt_s (local.get $target_byte_addr) (i32.const 0))
+          (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte))
+        )
+      ;; --- ВЕТКА TRUE: Выход за границы ---
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 3))
+      )
+      ;; --- ВЕТКА FALSE: Безопасно пишем слово ---
+      (else
+        (i32.store (local.get $target_byte_addr) (local.get $value_to_store))
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция JBLC (Опкод 0x1C) — Длинный условный переход назад, если 0
+  ;; ========================================================
+  (func (export "ir_JBLC")
+    (local $cond i32)
+    (local $pc1 i32)
+    (local $current_pc i32)
+
+    ;; 1. Вытаскиваем значение с вершины стека
+    (local.set $cond (call $pop))
+
+    ;; 2. Проверяем условие: if (pop() == 0)
+    (if (i32.eqz (local.get $cond))
+      ;; --- ВЕТКА TRUE (выполняем длинный переход назад) ---
+      (then
+        ;; int pc1 = next2(); (прочитает 2 байта аргумента и сделает pc += 2)
+        (local.set $pc1 (call $next2))
+
+        ;; pc -= pc1;
+        (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+        (i32.store
+          (global.get $PC_ADDR)
+          (i32.sub (local.get $current_pc) (local.get $pc1))
+        )
+      )
+      ;; --- ВЕТКА FALSE (else) ---
+      (else
+        ;; pc += 2; (просто пропускаем 2 байта аргумента pc1, вставая на следующую инструкцию)
+        (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+        (i32.store
+          (global.get $PC_ADDR)
+          (i32.add (local.get $current_pc) (i32.const 2))
+        )
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция SYS (Опкод 0xFC) — Системные вызовы процессора
+  ;; ========================================================
+  (func (export "ir_SYS")
+    (local $sub_op i32)
+    (local $val i32)
+
+    ;; 1. Читаем байт подкоманды из потока кода: next()
+    (local.set $sub_op (call $next))
+
+    ;; 2. Разбираем подкоманды через дерево условий
+    (block $exit_sys
+      ;; case 0x0: cpu version
+      (if (i32.eq (local.get $sub_op) (i32.const 0x00))
+        (then
+          (call $push (i32.const 7))
+          (br $exit_sys)
+        )
+      )
+
+      ;; case 0x1: print hex top of stack
+      (if (i32.eq (local.get $sub_op) (i32.const 0x01))
+        (then
+          ;; Забираем значение со стека выражений и отдаем на печать хосту
+          (local.set $val (call $pop))
+          (call $sys_print_hex (local.get $val))
+          (br $exit_sys)
+        )
+      )
+
+      ;; case 0x2: microcode version
+      (if (i32.eq (local.get $sub_op) (i32.const 0x02))
+        (then
+          (call $push (i32.const 2))
+          (br $exit_sys)
+        )
+      )
+
+      ;; default: некорректная подкоманда
+      ;; pc-- (Откатываемся на начало аргумента инструкции SYS)
+      (i32.store
+        (global.get $PC_ADDR)
+        (i32.sub (i32.load (global.get $PC_ADDR)) (i32.const 1))
+      )
+      ;; ipt = 7
+      (i32.store (global.get $IPT_ADDR) (i32.const 7))
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция NII (Опкод 0xFD) — Never Implemented Instruction
+  ;; ========================================================
+  (func (export "ir_NII")
+    ;; Взводим код прерывания недопустимой инструкции (IPT = 7)
+    (i32.store (global.get $IPT_ADDR) (i32.const 7))
+  )
+
+    ;; ========================================================
+    ;; Инструкция SGW (Опкод 0x31) — Сохранение глобального слова со смещением
+    ;; ========================================================
+    (func (export "ir_SGW")
+      (local $val i32)            ;; Сохраняемое значение из pop()
+      (local $offset i32)         ;; Смещение из next() (в словах)
+      (local $g i32)              ;; Указатель глобальной области G
+      (local $target_byte_addr i32) ;; Итоговый байтовый адрес для Wasm
+      (local $max_safe_byte i32)
+
+      ;; 1. Забираем значение со стека выражений через pop()
+      (local.set $val (call $pop))
+
+      ;; 2. Читаем байт смещения аргумента из потока кода: int offset = next();
+      (local.set $offset (call $next))
+
+      ;; 3. Читаем текущий указатель глобальной области G
+      (local.set $g (i32.load (global.get $G_ADDR)))
+
+      ;; 4. Вычисляем физический байтовый адрес: (g + offset) * 4
+      (local.set $target_byte_addr
+        (i32.mul
+          (i32.add (local.get $g) (local.get $offset))
+          (i32.const 4)
+        )
+      )
+
+      ;; 5. МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+      (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+      (if (i32.or
+            (i32.lt_s (local.get $target_byte_addr) (i32.const 0))
+            (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte))
+          )
+        ;; --- ВЕТКА TRUE: Выход за границы ---
+        (then
+          (i32.store (global.get $IPT_ADDR) (i32.const 3))
+        )
+        ;; --- ВЕТКА FALSE: Безопасно пишем слово ---
+        (else
+          (i32.store (local.get $target_byte_addr) (local.get $val))
+        )
+      )
+    )
+
+  ;; ========================================================
+  ;; Инструкция CL (Опкод 0xCF) — Вызов локальной процедуры со смещением
+  ;; ========================================================
+  (func (export "ir_CL")
+    (local $s i32)
+    (local $h i32)
+    (local $i i32)
+    (local $f i32)
+    (local $pc_target_bytes i32)
+    (local $max_safe_byte i32)
+
+    ;; 1. Читаем текущие значения S и H для проверки лимитов процедурного стека
+    (local.set $s (i32.load (global.get $S_ADDR)))
+    (local.set $h (i32.load (global.get $H_ADDR)))
+
+    ;; 2. Проверяем переполнение: if (s + 4 > h)
+    (if (i32.gt_s (i32.add (local.get $s) (i32.const 4)) (local.get $h))
+      ;; --- ВЕТКА TRUE: Переполнение процедурного стека ---
+      (then
+        ;; pc--; ipt = 0x40; (Откатываемся на начало инструкции CL)
+        (i32.store (global.get $PC_ADDR) (i32.sub (i32.load (global.get $PC_ADDR)) (i32.const 1)))
+        (i32.store (global.get $IPT_ADDR) (i32.const 0x40))
+      )
+      ;; --- ВЕТКА FALSE: Безопасный вызов ---
+      (else
+        ;; int i = next(); (Считываем смещение из аргументов, PC сдвигается на 1)
+        (local.set $i (call $next))
+
+        ;; mark(l, false); -> Передаем текущее значение регистра L и флаг extern = 0
+        (call $mark (i32.load (global.get $L_ADDR)) (i32.const 0))
+
+        ;; Читаем актуальное значение регистра F
+        (local.set $f (i32.load (global.get $F_ADDR)))
+
+        ;; Вычисляем байтовый физический адрес таблицы переходов: (f + i) * 4
+        (local.set $pc_target_bytes (i32.mul (i32.add (local.get $f) (local.get $i)) (i32.const 4)))
+        (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+        ;; МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ: Проверяем адрес перед чтением mem(f + i)
+        (if (i32.or
+              (i32.lt_s (local.get $pc_target_bytes) (i32.const 0))
+              (i32.gt_s (local.get $pc_target_bytes) (local.get $max_safe_byte))
+            )
+          (then
+            (i32.store (global.get $IPT_ADDR) (i32.const 3))
+          )
+          (else
+            ;; pc = mem(f + i); -> Переходим на адрес локальной процедуры
+            (i32.store (global.get $PC_ADDR) (i32.load (local.get $pc_target_bytes)))
+          )
+        )
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция LPC (Опкод 0xEB) — Загрузка константы процедуры
+  ;; ========================================================
+  (func (export "ir_LPC")
+    (local $i_offset i32)
+    (local $j_val i32)
+    (local $g i32)
+    (local $target_word_addr i32)
+    (local $target_byte_addr i32)
+    (local $max_safe_byte i32)
+    (local $word_val i32)
+    (local $packed_result i32)
+
+    ;; 1. Читаем аргументы из потока кода подряд
+    (local.set $i_offset (call $next))
+    (local.set $j_val (call $next))
+
+    ;; 2. Читаем базовый регистр G
+    (local.set $g (i32.load (global.get $G_ADDR)))
+
+    ;; 3. Вычисляем гостевой словесный адрес: g - i - 1
+    (local.set $target_word_addr
+      (i32.sub
+        (i32.sub (local.get $g) (local.get $i_offset))
+        (i32.const 1)
+      )
+    )
+
+    ;; 4. Переводим в байты: (g - i - 1) * 4
+    (local.set $target_byte_addr (i32.mul (local.get $target_word_addr) (i32.const 4)))
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    ;; 5. МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (if (i32.or
+          (i32.lt_s (local.get $target_byte_addr) (i32.const 0))
+          (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte))
+        )
+      ;; --- ВЕТКА TRUE: Выход за границы ---
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 3))
+        (local.set $word_val (i32.const 0))
+      )
+      ;; --- ВЕТКА FALSE: Читаем исходное слово ---
+      (else
+        (local.set $word_val (i32.load (local.get $target_byte_addr)))
+      )
+    )
+
+    ;; 6. УПАКОВКА БАЙТА: i = (i & 0x00FFFFFF) | (j << 24)
+    (local.set $packed_result
+      (i32.or
+        (i32.and (local.get $word_val) (i32.const 0x00FFFFFF))
+        (i32.shl (local.get $j_val) (i32.const 24))
+      )
+    )
+
+    ;; 7. Кладем упакованную константу процедуры на стек выражений
+    (call $push (local.get $packed_result))
+  )
+
+  ;; ========================================================
+  ;; Инструкция LEW (Опкод 0x22) — Тройная косвенная загрузка внешнего слова
+  ;; ========================================================
+  (func (export "ir_LEW")
+    (local $next1 i32)
+    (local $next2 i32)
+    (local $g i32)
+    (local $addr1 i32)
+    (local $addr2 i32)
+    (local $val i32)
+    (local $byte_addr i32)
+    (local $max_safe_byte i32)
+
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    ;; 1. Считываем первый байт-аргумент
+    (local.set $next1 (call $next))
+
+    ;; 2. Читаем текущий регистр G
+    (local.set $g (i32.load (global.get $G_ADDR)))
+
+    ;; --- ШАГ 1: addr1 = mem(g - next1 - 1) ---
+    (local.set $byte_addr (i32.mul (i32.sub (i32.sub (local.get $g) (local.get $next1)) (i32.const 1)) (i32.const 4)))
+    (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (call $push (i32.const 0)) (return))
+    )
+    (local.set $addr1 (i32.load (local.get $byte_addr)))
+
+    ;; --- ШАГ 2: addr2 = mem(addr1) ---
+    (local.set $byte_addr (i32.mul (local.get $addr1) (i32.const 4)))
+    (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (call $push (i32.const 0)) (return))
+    )
+    (local.set $addr2 (i32.load (local.get $byte_addr)))
+
+    ;; 3. Считываем второй байт-аргумент
+    (local.set $next2 (call $next))
+
+    ;; --- ШАГ 3: val = mem(addr2 + next2) ---
+    (local.set $byte_addr (i32.mul (i32.add (local.get $addr2) (local.get $next2)) (i32.const 4)))
+    (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (local.set $val (i32.const 0)))
+      (else (local.set $val (i32.load (local.get $byte_addr))))
+    )
+
+    ;; 4. Пушим итоговый результат на стек
+    (call $push (local.get $val))
+  )
+
+  ;; ========================================================
+  ;; Инструкция GETM (Опкод 0x82) — Получение маски прерываний
+  ;; ========================================================
+  (func (export "ir_GETM")
+    (local $m_val i32)
+
+    ;; 1. Читаем текущее значение регистра M из памяти регистров
+    (local.set $m_val (i32.load (global.get $M_ADDR)))
+
+    ;; 2. Кладем считанную маску на стек выражений
+    (call $push (local.get $m_val))
+  )
+
+  ;; ========================================================
+  ;; Инструкция SETM (Опкод 0x83) — Установка маски прерываний
+  ;; ========================================================
+  (func (export "ir_SETM")
+    (local $m_val i32)
+
+    ;; 1. Извлекаем значение маски со стека выражений
+    (local.set $m_val (call $pop))
+
+    ;; 2. Записываем полученное значение в регистр M
+    (i32.store (global.get $M_ADDR) (local.get $m_val))
+  )
+  ;; ========================================================
+  ;; Инструкция LGW (Опкод 0x21) — Загрузка глобального слова со смещением
+  ;; ========================================================
+  (func (export "ir_LGW")
+    (local $g i32)            ;; Регистр G (в словах)
+    (local $offset i32)       ;; Смещение из next() (в словах)
+    (local $target_byte_addr i32) ;; Итоговый байтовый адрес для Wasm
+    (local $max_safe_byte i32)
+    (local $loaded_word i32)
+
+    ;; 1. Читаем текущий указатель глобальной области G
+    (local.set $g (i32.load (global.get $G_ADDR)))
+
+    ;; 2. Читаем байт смещения аргумента из потока кода: int offset = next();
+    (local.set $offset (call $next))
+
+    ;; 3. Вычисляем физический байтовый адрес: (g + offset) * 4
+    (local.set $target_byte_addr
+      (i32.mul
+        (i32.add (local.get $g) (local.get $offset))
+        (i32.const 4)
+      )
+    )
+
+    ;; 4. МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    (if (i32.or
+          (i32.lt_s (local.get $target_byte_addr) (i32.const 0))
+          (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte))
+        )
+      ;; --- ВЕТКА TRUE: Выход за границы ---
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 3))
+        (local.set $loaded_word (i32.const 0))
+      )
+      ;; --- ВЕТКА FALSE: Безопасно читаем 32-битное слово ---
+      (else
+        (local.set $loaded_word (i32.load (local.get $target_byte_addr)))
+      )
+    )
+
+    ;; 5. Кладем прочитанное значение на стек выражений
+    (call $push (local.get $loaded_word))
+  )
+
+  ;; ========================================================
+  ;; Инструкция JFS (Опкод 0x1B) — Безусловный переход вперед
+  ;; ========================================================
+  (func (export "ir_JFS")
+    (local $pc1 i32)
+    (local $current_pc i32)
+
+    ;; 1. int pc1 = next(); (Считываем смещение и сдвигаем PC вперед на 1 байт)
+    (local.set $pc1 (call $next))
+
+    ;; 2. pc += pc1; (Прибавляем смещение к текущему значению регистра PC)
+    (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+    (i32.store
+      (global.get $PC_ADDR)
+      (i32.add (local.get $current_pc) (local.get $pc1))
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция PDX (Опкод 0xEF) — Подготовка динамического индекса
+  ;; ========================================================
+  (func (export "ir_PDX")
+    (local $i i32)            ;; Индекс (index), извлекается первым
+    (local $j i32)            ;; Адрес дескриптора (desc. address), извлекается вторым
+    (local $k i32)            ;; Базовый адрес массива (address) = mem(j)
+    (local $len i32)          ;; Длина массива (length) = mem(j + 1)
+    (local $byte_addr i32)
+    (local $max_safe_byte i32)
+
+    ;; 1. Извлекаем параметры со стека выражений в строгом порядке Java
+    (local.set $i (call $pop))
+    (local.set $j (call $pop))
+
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    ;; --- Читаем k = mem(j) ---
+    (local.set $byte_addr (i32.mul (local.get $j) (i32.const 4)))
+    (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (local.set $k (i32.const 0)))
+      (else (local.set $k (i32.load (local.get $byte_addr))))
+    )
+
+    ;; --- Читаем len = mem(j + 1) ---
+    (local.set $byte_addr (i32.mul (i32.add (local.get $j) (i32.const 1)) (i32.const 4)))
+    (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (local.set $len (i32.const 0)))
+      (else (local.set $len (i32.load (local.get $byte_addr))))
+    )
+
+    ;; 2. Возвращаем результаты на стек выражений в порядке Java: push(k), затем push(i)
+    (call $push (local.get $k))
+    (call $push (local.get $i))
+
+    ;; 3. Проверяем границы индекса: if (i < 0 || i > len)
+    (if (i32.or
+          (i32.lt_s (local.get $i) (i32.const 0))
+          (i32.gt_s (local.get $i) (local.get $len))
+        )
+      (then
+        ;; Взводим код прерывания ошибки индекса (IPT = 0x4A)
+        (i32.store (global.get $IPT_ADDR) (i32.const 0x4A))
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция STORE (Опкод 0xB3) — Сохранение стека (Хост-бинд)
+  ;; ========================================================
+  (func (export "ir_STORE")
+    (local $s i32)
+    (local $h i32)
+
+    ;; 1. Читаем текущие значения S и H для проверки лимитов
+    (local.set $s (i32.load (global.get $S_ADDR)))
+    (local.set $h (i32.load (global.get $H_ADDR)))
+
+    ;; 2. Проверяем переполнение процедурного стека: if (s + 8 > h)
+    (if (i32.gt_s (i32.add (local.get $s) (i32.const 8)) (local.get $h))
+      ;; --- ВЕТКА TRUE: Переполнение ---
+      (then
+        ;; pc--; ipt = 0x40; (Откатываемся на саму инструкцию STORE)
+        (i32.store (global.get $PC_ADDR) (i32.sub (i32.load (global.get $PC_ADDR)) (i32.const 1)))
+        (i32.store (global.get $IPT_ADDR) (i32.const 0x40))
+      )
+      ;; --- ВЕТКА FALSE: Безопасное сохранение ---
+      (else
+        ;; Вызываем хостовый метод сохранения стека
+        (call $save_stack_host_call)
+      )
+    )
+  )
+  ;; ========================================================
+  ;; Инструкция CX (Опкод 0xCC) — Вызов внешней процедуры
+  ;; ========================================================
+  (func (export "ir_CX")
+    (local $s i32) (local $h i32)
+    (local $next1 i32) (local $next2 i32)
+    (local $g_old i32) (local $k i32) (local $j i32)
+    (local $g_new i32) (local $f_new i32)
+    (local $byte_addr i32) (local $max_safe_byte i32)
+
+    ;; 1. Проверяем лимиты процедурного стека
+    (local.set $s (i32.load (global.get $S_ADDR)))
+    (local.set $h (i32.load (global.get $H_ADDR)))
+
+    (if (i32.gt_s (i32.add (local.get $s) (i32.const 4)) (local.get $h))
+      ;; --- ВЕТКА TRUE: Переполнение ---
+      (then
+        (i32.store (global.get $PC_ADDR) (i32.sub (i32.load (global.get $PC_ADDR)) (i32.const 1)))
+        (i32.store (global.get $IPT_ADDR) (i32.const 0x40))
+      )
+      ;; --- ВЕТКА FALSE: Безопасный вызов ---
+      (else
+        (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+        (local.set $g_old (i32.load (global.get $G_ADDR)))
+
+        ;; Считываем первый байт-аргумент: next()
+        (local.set $next1 (call $next))
+
+        ;; k = mem(g - next1 - 1)
+        (local.set $byte_addr (i32.mul (i32.sub (i32.sub (local.get $g_old) (local.get $next1)) (i32.const 1)) (i32.const 4)))
+        (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+          (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (return))
+        )
+        (local.set $k (i32.load (local.get $byte_addr)))
+
+        ;; j = k & 0x3FFFFF
+        (local.set $j (i32.and (local.get $k) (i32.const 0x3FFFFF)))
+
+        ;; Считываем второй байт-аргумент: next()
+        (local.set $next2 (call $next))
+
+        ;; mark(g, true); -> Передаем старый регистр G и extern = 1
+        (call $mark (local.get $g_old) (i32.const 1))
+
+        ;; g = mem(j)
+        (local.set $byte_addr (i32.mul (local.get $j) (i32.const 4)))
+        (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+          (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (return))
+        )
+        (local.set $g_new (i32.load (local.get $byte_addr)))
+        (i32.store (global.get $G_ADDR) (local.get $g_new))
+
+        ;; f = mem(g)
+        (local.set $byte_addr (i32.mul (local.get $g_new) (i32.const 4)))
+        (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+          (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (return))
+        )
+        (local.set $f_new (i32.load (local.get $byte_addr)))
+        (i32.store (global.get $F_ADDR) (local.get $f_new))
+
+        ;; CODE = f (эквивалент pcode = getCode(f))
+        (i32.store (global.get $CODE_ADDR) (local.get $f_new))
+
+        ;; pc = mem(f + i)
+        (local.set $byte_addr (i32.mul (i32.add (local.get $f_new) (local.get $next2)) (i32.const 4)))
+        (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+          (then (i32.store (global.get $IPT_ADDR) (i32.const 3)))
+          (else (i32.store (global.get $PC_ADDR) (i32.load (local.get $byte_addr))))
+        )
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция SWAP (Опкод 0xF0) — Менят местами два верхних элемента стека
+  ;; ========================================================
+  (func (export "ir_SWAP")
+    (local $i i32) (local $j i32)
+    (local.set $i (call $pop))
+    (local.set $j (call $pop))
+    (call $push (local.get $i))
+    (call $push (local.get $j))
+  )
+
+  ;; ========================================================
+  ;; Инструкция LPA (Опкод 0xF1) — Загрузка адреса параметра
+  ;; ========================================================
+  (func (export "ir_LPA")
+    (local $l i32) (local $offset i32)
+    (local.set $l (i32.load (global.get $L_ADDR)))
+    (local.set $offset (call $next))
+    ;; push(l - offset - 1)
+    (call $push (i32.sub (i32.sub (local.get $l) (local.get $offset)) (i32.const 1)))
+  )
+
+  ;; ========================================================
+  ;; Инструкция LPW (Опкод 0xF2) — Загрузка значения параметра (WORD)
+  ;; ========================================================
+  (func (export "ir_LPW")
+    (local $l i32) (local $offset i32) (local $target_word_addr i32)
+    (local $target_byte_addr i32) (local $max_safe_byte i32) (local $loaded_word i32)
+
+    (local.set $l (i32.load (global.get $L_ADDR)))
+    (local.set $offset (call $next))
+    (local.set $target_word_addr (i32.sub (i32.sub (local.get $l) (local.get $offset)) (i32.const 1)))
+
+    (local.set $target_byte_addr (i32.mul (local.get $target_word_addr) (i32.const 4)))
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    ;; МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (if (i32.or (i32.lt_s (local.get $target_byte_addr) (i32.const 0)) (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (local.set $loaded_word (i32.const 0)))
+      (else (local.set $loaded_word (i32.load (local.get $target_byte_addr))))
+    )
+    (call $push (local.get $loaded_word))
+  )
+
+  ;; ========================================================
+  ;; Инструкция SPW (Опкод 0xF3) — Сохранение значения параметра (WORD)
+  ;; ========================================================
+  (func (export "ir_SPW")
+    (local $l i32) (local $offset i32) (local $target_word_addr i32)
+    (local $target_byte_addr i32) (local $max_safe_byte i32) (local $val i32)
+
+    (local.set $l (i32.load (global.get $L_ADDR)))
+    (local.set $offset (call $next))
+    (local.set $target_word_addr (i32.sub (i32.sub (local.get $l) (local.get $offset)) (i32.const 1)))
+
+    ;; Извлекаем сохраняемое значение со стека выражений: pop()
+    (local.set $val (call $pop))
+
+    (local.set $target_byte_addr (i32.mul (local.get $target_word_addr) (i32.const 4)))
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    ;; МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (if (i32.or (i32.lt_s (local.get $target_byte_addr) (i32.const 0)) (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)))
+      (else (i32.store (local.get $target_byte_addr) (local.get $val)))
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция SSWU (Опкод 0xF4) — Неразрушающее сохранение слова со стека
+  ;; ========================================================
+  (func (export "ir_SSWU")
+    (local $i i32)            ;; Значение, извлеченное первым
+    (local $target_word i32)  ;; Адрес в словах, извлеченный вторым
+    (local $target_byte_addr i32) (local $max_safe_byte i32)
+
+    (local.set $i (call $pop))
+    (local.set $target_word (call $pop))
+
+    (local.set $target_byte_addr (i32.mul (local.get $target_word) (i32.const 4)))
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    ;; МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (if (i32.or (i32.lt_s (local.get $target_byte_addr) (i32.const 0)) (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)))
+      (else (i32.store (local.get $target_byte_addr) (local.get $i)))
+    )
+
+    ;; Возвращаем значение i обратно на стек выражений (Undestructive)
+    (call $push (local.get $i))
+  )
+
+  ;; ========================================================
+  ;; Инструкция ADDPC (Опкод 0xBC) — Добавить PC к вершине стека
+  ;; ========================================================
+  (func (export "ir_ADDPC")
+    (local $val i32)
+    (local $pc i32)
+    (local.set $val (call $pop))
+    (local.set $pc (i32.load (global.get $PC_ADDR)))
+    (call $push (i32.add (local.get $val) (local.get $pc)))
+  )
+
+  ;; ========================================================
+  ;; Инструкция JMP (Опкод 0xBD) — Абсолютный безусловный переход
+  ;; ========================================================
+  (func (export "ir_JMP")
+    ;; Напрямую записываем вытащенное со стека значение в регистр PC
+    (i32.store (global.get $PC_ADDR) (call $pop))
+  )
+
+  ;; ========================================================
+  ;; Инструкция ORJP (Опкод 0xBE) — Короткое логическое ИЛИ с переходом
+  ;; ========================================================
+  (func (export "ir_ORJP")
+    (local $cond i32)
+    (local $pc1 i32)
+    (local $current_pc i32)
+
+    (local.set $cond (call $pop))
+
+    ;; if (pop() != 0)
+    (if (i32.ne (local.get $cond) (i32.const 0))
+      ;; --- ВЕТКА TRUE: Возвращаем 1 и прыгаем вперед ---
+      (then
+        (call $push (i32.const 1))
+        (local.set $pc1 (call $next))
+        (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+        (i32.store (global.get $PC_ADDR) (i32.add (local.get $current_pc) (local.get $pc1)))
+      )
+      ;; --- ВЕТКА FALSE: Просто пропускаем байт смещения ---
+      (else
+        (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+        (i32.store (global.get $PC_ADDR) (i32.add (local.get $current_pc) (i32.const 1)))
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция ANDJP (Опкод 0xBF) — Короткое логическое И с переходом
+  ;; ========================================================
+  (func (export "ir_ANDJP")
+    (local $cond i32)
+    (local $pc1 i32)
+    (local $current_pc i32)
+
+    (local.set $cond (call $pop))
+
+    ;; if (pop() == 0)
+    (if (i32.eqz (local.get $cond))
+      ;; --- ВЕТКА TRUE: Возвращаем 0 и прыгаем вперед ---
+      (then
+        (call $push (i32.const 0))
+        (local.set $pc1 (call $next))
+        (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+        (i32.store (global.get $PC_ADDR) (i32.add (local.get $current_pc) (local.get $pc1)))
+      )
+      ;; --- ВЕТКА FALSE: Просто пропускаем байт смещения ---
+      (else
+        (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+        (i32.store (global.get $PC_ADDR) (i32.add (local.get $current_pc) (i32.const 1)))
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция DECS (Опкод 0xB0) — Уменьшение вершины процедурного стека
+  ;; ========================================================
+  (func (export "ir_DECS")
+    (local $s i32)
+    (local $sz i32)
+
+    ;; 1. Читаем текущее значение регистра S из памяти
+    (local.set $s (i32.load (global.get $S_ADDR)))
+
+    ;; 2. Извлекаем размер освобождаемого блока со стека выражений: pop()
+    (local.set $sz (call $pop))
+
+    ;; 3. Уменьшаем S на sz слов: s -= sz и записываем обратно
+    (i32.store
+      (global.get $S_ADDR)
+      (i32.sub (local.get $s) (local.get $sz))
+    )
+  )
+
+    ;; ========================================================
+    ;; Инструкция CHKZ (Опкод 0xC7) — Проверка границ массива (от 0)
+    ;; ========================================================
+    (func (export "ir_CHKZ")
+      (local $sp i32)
+      (local $sp_idx_top i32)  ;; Индекс верхней границы (sp - 1)
+      (local $sp_idx_val i32)  ;; Индекс проверяемого значения (sp - 2)
+      (local $limit i32)       ;; Верхняя граница массива
+      (local $i i32)           ;; Проверяемый индекс
+
+      ;; 1. Читаем текущий SP
+      (local.set $sp (i32.load (global.get $SP_ADDR)))
+
+      ;; 2. Проверяем нехватку элементов: if (sp < 2)
+      (if (i32.lt_s (local.get $sp) (i32.const 2))
+        ;; --- ВЕТКА TRUE: Нехватка элементов на стеке ---
+        (then
+          (i32.store (global.get $IPT_ADDR) (i32.const 0x4C))
+        )
+        ;; --- ВЕТКА FALSE: Проверяем границы ---
+        (else
+          ;; Вычисляем физические адреса элементов стека в памяти Wasm
+          (local.set $sp_idx_top (i32.sub (local.get $sp) (i32.const 1)))
+          (local.set $sp_idx_val (i32.sub (local.get $sp) (i32.const 2)))
+
+          ;; Читаем значения из гостевого стека
+          (local.set $limit (i32.load (i32.add (global.get $STACK_ADDR) (i32.mul (local.get $sp_idx_top) (i32.const 4)))))
+          (local.set $i (i32.load (i32.add (global.get $STACK_ADDR) (i32.mul (local.get $sp_idx_val) (i32.const 4)))))
+
+          ;; Проверяем: if (i < 0 || i > limit)
+          (if (i32.or
+                (i32.lt_s (local.get $i) (i32.const 0))
+                (i32.gt_s (local.get $i) (local.get $limit))
+              )
+            ;; --- Индекс некорректен ---
+            (then
+              (i32.store (global.get $IPT_ADDR) (i32.const 0x4A))
+            )
+            ;; --- Индекс валиден: делаем sp-- (схлопываем границу, оставляя индекс) ---
+            (else
+              ;; Записываем значение sp_idx_top в регистр SP_ADDR
+              (i32.store (global.get $SP_ADDR) (local.get $sp_idx_top))
+            )
+          )
+        )
+      )
+    )
+
+  ;; ========================================================
+  ;; Инструкция LXW (Опкод 0x41) — Индексная загрузка слова из памяти
+  ;; ========================================================
+  (func (export "ir_LXW")
+    (local $val2 i32)         ;; Верхнее значение со стека, извлекается первым
+    (local $val1 i32)         ;; Предыдущее значение со стека, извлекается вторым
+    (local $target_byte_addr i32) ;; Итоговый байтовый адрес для Wasm
+    (local $max_safe_byte i32)
+    (local $loaded_word i32)
+
+    ;; 1. Извлекаем операнды со стека выражений в строгом порядке Java
+    (local.set $val2 (call $pop))
+    (local.set $val1 (call $pop))
+
+    ;; 2. Вычисляем физический байтовый адрес: (val1 + val2) * 4
+    (local.set $target_byte_addr
+      (i32.mul
+        (i32.add (local.get $val1) (local.get $val2))
+        (i32.const 4)
+      )
+    )
+
+    ;; 3. МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    (if (i32.or
+          (i32.lt_s (local.get $target_byte_addr) (i32.const 0))
+          (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte))
+        )
+      ;; --- ВЕТКА TRUE: Выход за границы ---
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 3))
+        (local.set $loaded_word (i32.const 0))
+      )
+      ;; --- ВЕТКА FALSE: Безопасно читаем 32-битное слово ---
+      (else
+        (local.set $loaded_word (i32.load (local.get $target_byte_addr)))
+      )
+    )
+
+    ;; 4. Кладем прочитанное значение на стек выражений
+    (call $push (local.get $loaded_word))
+  )
+
+  ;; ========================================================
+  ;; Инструкция SXW (Опкод 0x51) — Индексная запись слова в память
+  ;; ========================================================
+  (func (export "ir_SXW")
+    (local $value_to_store i32) ;; Значение для записи, извлекается ПЕРВЫМ
+    (local $addr_val2 i32)      ;; Операнд адреса, извлекается ВТОРЫМ
+    (local $addr_val1 i32)      ;; Операнд адреса, извлекается ТРЕТЬИМ
+    (local $target_byte_addr i32) ;; Итоговый байтовый адрес для Wasm
+    (local $max_safe_byte i32)
+
+    ;; 1. Извлекаем параметры со стека выражений в строгом порядке Java
+    (local.set $value_to_store (call $pop))
+    (local.set $addr_val2 (call $pop))
+    (local.set $addr_val1 (call $pop))
+
+    ;; 2. Вычисляем физический байтовый адрес: (addr_val1 + addr_val2) * 4
+    (local.set $target_byte_addr
+      (i32.mul
+        (i32.add (local.get $addr_val1) (local.get $addr_val2))
+        (i32.const 4)
+      )
+    )
+
+    ;; 3. МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    (if (i32.or
+          (i32.lt_s (local.get $target_byte_addr) (i32.const 0))
+          (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte))
+        )
+      ;; --- ВЕТКА TRUE: Выход за границы ---
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 3))
+      )
+      ;; --- ВЕТКА FALSE: Безопасно пишем 32-битное слово ---
+      (else
+        (i32.store (local.get $target_byte_addr) (local.get $value_to_store))
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция CHK (Опкод 0xC6) — Полная проверка границ массива (low .. high)
+  ;; ========================================================
+  (func (export "ir_CHK")
+    (local $sp i32)
+    (local $sp_idx_high i32) ;; Индекс верхней границы (sp - 1)
+    (local $sp_idx_low i32)  ;; Индекс нижней границы (sp - 2)
+    (local $sp_idx_val i32)  ;; Индекс проверяемого значения (sp - 3)
+    (local $high i32)        ;; Верхняя граница массива
+    (local $low i32)         ;; Нижняя граница массива
+    (local $i i32)           ;; Проверяемый индекс
+
+    ;; 1. Читаем текущий SP
+    (local.set $sp (i32.load (global.get $SP_ADDR)))
+
+    ;; 2. Проверяем нехватку элементов: if (sp < 3)
+    (if (i32.lt_s (local.get $sp) (i32.const 3))
+      ;; --- ВЕТКА TRUE: Нехватка элементов на стеке ---
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 0x4C))
+      )
+      ;; --- ВЕТКА FALSE: Проверяем границы ---
+      (else
+        ;; Вычисляем физические индексы элементов стека
+        (local.set $sp_idx_high (i32.sub (local.get $sp) (i32.const 1)))
+        (local.set $sp_idx_low (i32.sub (local.get $sp) (i32.const 2)))
+        (local.set $sp_idx_val (i32.sub (local.get $sp) (i32.const 3)))
+
+        ;; Читаем значения из гостевого стека
+        (local.set $high (i32.load (i32.add (global.get $STACK_ADDR) (i32.mul (local.get $sp_idx_high) (i32.const 4)))))
+        (local.set $low (i32.load (i32.add (global.get $STACK_ADDR) (i32.mul (local.get $sp_idx_low) (i32.const 4)))))
+        (local.set $i (i32.load (i32.add (global.get $STACK_ADDR) (i32.mul (local.get $sp_idx_val) (i32.const 4)))))
+
+        ;; Проверяем: if (i < low || i > high)
+        (if (i32.or
+              (i32.lt_s (local.get $i) (local.get $low))
+              (i32.gt_s (local.get $i) (local.get $high))
+            )
+          ;; --- Индекс некорректен ---
+          (then
+            (i32.store (global.get $IPT_ADDR) (i32.const 0x4A))
+          )
+          ;; --- Индекс валиден: делаем sp -= 2 (схлопываем обе границы, оставляя индекс) ---
+          (else
+            ;; Новый SP равен (sp - 2), что в точности совпадает со значением sp_idx_low
+            (i32.store (global.get $SP_ADDR) (local.get $sp_idx_low))
+          )
+        )
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция SLW (Опкод 0x30) — Сохранение локального слова со смещением
+  ;; ========================================================
+  (func (export "ir_SLW")
+    (local $l i32)            ;; Регистр L (в словах)
+    (local $offset i32)       ;; Смещение из next() (в словах), извлекается первым
+    (local $val i32)          ;; Значение из pop(), извлекается вторым
+    (local $target_byte_addr i32) ;; Итоговый байтовый адрес для Wasm
+    (local $max_safe_byte i32)
+
+    ;; 1. Читаем текущий указатель локального кадра L
+    (local.set $l (i32.load (global.get $L_ADDR)))
+
+    ;; 2. Считываем байт смещения аргумента из потока кода: next()
+    (local.set $offset (call $next))
+
+    ;; 3. Извлекаем сохраняемое значение со стека выражений: pop()
+    (local.set $val (call $pop))
+
+    ;; 4. Вычисляем физический байтовый адрес: (l + offset) * 4
+    (local.set $target_byte_addr
+      (i32.mul
+        (i32.add (local.get $l) (local.get $offset))
+        (i32.const 4)
+      )
+    )
+
+    ;; 5. МЯГКАЯ ВАЛИДАЦИЯ ГРАНИЦ
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    (if (i32.or
+          (i32.lt_s (local.get $target_byte_addr) (i32.const 0))
+          (i32.gt_s (local.get $target_byte_addr) (local.get $max_safe_byte))
+        )
+      ;; --- ВЕТКА TRUE: Выход за границы ---
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 3))
+      )
+      ;; --- ВЕТКА FALSE: Безопасно пишем 32-битное слово ---
+      (else
+        (i32.store (local.get $target_byte_addr) (local.get $val))
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция ACTIV (Опкод 0xFA) — Получить указатель на активный процесс
+  ;; ========================================================
+  (func (export "ir_ACTIV")
+    ;; Читаем текущее значение регистра P из памяти регистров
+    ;; и сразу передаем его в качестве аргумента в функцию push()
+    (call $push (i32.load (global.get $P_ADDR)))
+  )
+
+  ;; ========================================================
+  ;; Инструкция LODF (Опкод 0xB2) — Восстановление стека после ретерна (Хост-бинд)
+  ;; ========================================================
+  (func (export "ir_LODFV")
+    (local $return_val i32)
+
+    ;; 1. Временно забираем возвращаемое значение со стека текущей функции
+    (local.set $return_val (call $pop))
+
+    ;; 2. Вызываем хостовый метод для восстановления кадра стека родительской функции
+    (call $restore_stack_host_call)
+
+    ;; 3. Пушим возвращенное значение на вершину уже восстановленного родительского стека
+    (call $push (local.get $return_val))
+  )
+  ;; ========================================================
+  ;; Инструкция MUL (Опкод 0x8A) — Знаковое умножение
+  ;; ========================================================
+  (func (export "ir_MUL")
+    (local $sp i32)
+    (local $val2 i32)  ;; Верхний элемент (astack[sp]), извлекается первым
+    (local $val1 i32)  ;; Предыдущий элемент (astack[sp-1]), извлекается вторым
+
+    ;; 1. Читаем текущее значение SP из памяти регистров
+    (local.set $sp (i32.load (global.get $SP_ADDR)))
+
+    ;; 2. Проверяем условие нехватки элементов: if (sp <= 1)
+    (if (i32.le_s (local.get $sp) (i32.const 1))
+      (then
+        ;; Взводим код прерывания IPT
+        (i32.store (global.get $IPT_ADDR) (i32.const 0x4C))
+      )
+      (else
+        ;; Извлекаем оба значения со стека выражений в строгом порядке Java
+        (local.set $val2 (call $pop))
+        (local.set $val1 (call $pop))
+
+        ;; Считаем произведение нативной быстрой инструкцией процессора хоста
+        ;; и отправляем результат обратно на стек выражений
+        (call $push (i32.mul (local.get $val1) (local.get $val2)))
+      )
+    )
+  )
+  ;; ========================================================
+  ;; Инструкция JBL (Опкод 0x1D) — Длинный безусловный переход назад
+  ;; ========================================================
+  (func (export "ir_JBL")
+    (local $pc1 i32)
+    (local $current_pc i32)
+
+    ;; 1. int pc1 = next2(); (Считываем 2 байта смещения, PC сдвигается вперед на 2)
+    (local.set $pc1 (call $next2))
+
+    ;; 2. pc -= pc1; (Вычитаем смещение из текущего значения регистра PC)
+    (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+    (i32.store
+      (global.get $PC_ADDR)
+      (i32.sub (local.get $current_pc) (local.get $pc1))
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция CPCOP (Опкод 0xB6) — Копирование массива символов на стек
+  ;; ========================================================
+  (func (export "ir_CPCOP")
+    (local $i i32)            ;; Размер строки в байтах / текущий исходный адрес
+    (local $j i32)            ;; Количество слов для копирования
+    (local $s i32)            ;; Регистр S
+    (local $h i32)            ;; Регистр H
+    (local $l i32)            ;; Регистр L
+    (local $offset i32)       ;; Смещение локальной переменной из next()
+    (local $src_word i32)     ;; Слово, считанное из источника
+    (local $max_safe_byte i32)
+    (local $byte_addr i32)
+
+    ;; 1. Извлекаем размер строки в байтах: int i = pop();
+    (local.set $i (call $pop))
+
+    ;; 2. Вычисляем количество слов: j = i / 4 + 1
+    (local.set $j (i32.add (i32.div_s (local.get $i) (i32.const 4)) (i32.const 1)))
+
+    ;; Читаем регистры S и H
+    (local.set $s (i32.load (global.get $S_ADDR)))
+    (local.set $h (i32.load (global.get $H_ADDR)))
+
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    ;; 3. Проверка лимитов: if (j > h - s)
+    (if (i32.gt_s (local.get $j) (i32.sub (local.get $h) (local.get $s)))
+      (then
+        ;; push(i); pc--; ipt = 0x40;
+        (call $push (local.get $i))
+        (i32.store (global.get $PC_ADDR) (i32.sub (i32.load (global.get $PC_ADDR)) (i32.const 1)))
+        (i32.store (global.get $IPT_ADDR) (i32.const 0x40))
+      )
+      (else
+        ;; else if (j < 0)
+        (if (i32.lt_s (local.get $j) (i32.const 0))
+          (then
+            (i32.store (global.get $IPT_ADDR) (i32.const 0x4A))
+          )
+          ;; --- УСПЕШНОЕ КОПИРОВАНИЕ ---
+          (else
+            ;; Читаем смещение аргумента: next()
+            (local.set $offset (call $next))
+            (local.set $l (i32.load (global.get $L_ADDR)))
+
+            ;; mem(l + next(), s)
+            (local.set $byte_addr (i32.mul (i32.add (local.get $l) (local.get $offset)) (i32.const 4)))
+            (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+              (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (return))
+              (else (i32.store (local.get $byte_addr) (local.get $s)))
+            )
+
+            ;; Извлекаем исходный адрес строки: i = pop();
+            (local.set $i (call $pop))
+
+            ;; Копируем в цикле: while (j > 0)
+            (block $exit_copy_loop
+              (loop $copy_loop
+                (br_if $exit_copy_loop (i32.le_s (local.get $j) (i32.const 0)))
+
+                ;; --- Читаем из источника: src_word = mem(i++) ---
+                (local.set $byte_addr (i32.mul (local.get $i) (i32.const 4)))
+                (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+                  (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (br $exit_copy_loop))
+                  (else (local.set $src_word (i32.load (local.get $byte_addr))))
+                )
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+
+                ;; --- Записываем в процедурный стек: mem(s++, src_word) ---
+                (local.set $byte_addr (i32.mul (local.get $s) (i32.const 4)))
+                (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+                  (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (br $exit_copy_loop))
+                  (else (i32.store (local.get $byte_addr) (local.get $src_word)))
+                )
+                (local.set $s (i32.add (local.get $s) (i32.const 1)))
+
+                ;; j--
+                (local.set $j (i32.sub (local.get $j) (i32.const 1)))
+                (br $copy_loop)
+              )
+            )
+
+            ;; Сохраняем обновленный регистр S обратно
+            (i32.store (global.get $S_ADDR) (local.get $s))
+          )
+        )
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция COMP (Опкод 0xC3) — Побайтовое сравнение строк (strcmp)
+  ;; ========================================================
+  (func (export "ir_COMP")
+    (local $i i32)            ;; Словесный адрес строки B, извлекается первым
+    (local $j i32)            ;; Словесный адрес строки A, извлекается вторым
+    (local $byte_addr_b i32)  ;; Текущий физический байтовый адрес в строке B
+    (local $byte_addr_a i32)  ;; Текущий физический байтовый адрес в строке A
+    (local $a i32)            ;; Текущий байт строки A
+    (local $b i32)            ;; Текущий байт строки B
+    (local $max_safe_byte i32)
+
+    ;; 1. Извлекаем адреса строк со стека выражений строго по Java
+    (local.set $i (call $pop))
+    (local.set $j (call $pop))
+
+    ;; Вычисляем начальные байтовые адреса: word_addr * 4
+    (local.set $byte_addr_b (i32.mul (local.get $i) (i32.const 4)))
+    (local.set $byte_addr_a (i32.mul (local.get $j) (i32.const 4)))
+
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 1)))
+
+    ;; 2. Читаем первые символы строк с мягкой проверкой границ
+    (if (i32.or
+          (i32.or (i32.lt_s (local.get $byte_addr_a) (i32.const 0)) (i32.gt_s (local.get $byte_addr_a) (local.get $max_safe_byte)))
+          (i32.or (i32.lt_s (local.get $byte_addr_b) (i32.const 0)) (i32.gt_s (local.get $byte_addr_b) (local.get $max_safe_byte)))
+        )
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 3))
+        (local.set $a (i32.const 0))
+        (local.set $b (i32.const 0))
+      )
+      (else
+        (local.set $a (i32.load8_u (local.get $byte_addr_a)))
+        (local.set $b (i32.load8_u (local.get $byte_addr_b)))
+      )
+    )
+
+    ;; 3. Главный цикл сравнения строк: while(a == b && b != 0 && a != 0)
+    (block $exit_comp_loop
+      (loop $comp_loop
+        ;; Условия выхода из цикла:
+        (br_if $exit_comp_loop (i32.ne (local.get $a) (local.get $b)))
+        (br_if $exit_comp_loop (i32.eqz (local.get $b)))
+        (br_if $exit_comp_loop (i32.eqz (local.get $a)))
+
+        ;; Инкрементируем байтовые адреса вперед на 1 байт
+        (local.set $byte_addr_a (i32.add (local.get $byte_addr_a) (i32.const 1)))
+        (local.set $byte_addr_b (i32.add (local.get $byte_addr_b) (i32.const 1)))
+
+        ;; Читаем следующие байты с проверкой границ памяти
+        (if (i32.or
+              (i32.or (i32.lt_s (local.get $byte_addr_a) (i32.const 0)) (i32.gt_s (local.get $byte_addr_a) (local.get $max_safe_byte)))
+              (i32.or (i32.lt_s (local.get $byte_addr_b) (i32.const 0)) (i32.gt_s (local.get $byte_addr_b) (local.get $max_safe_byte)))
+            )
+          (then
+            (i32.store (global.get $IPT_ADDR) (i32.const 3))
+            (local.set $a (i32.const 0))
+            (local.set $b (i32.const 0))
+            (br $exit_comp_loop)
+          )
+          (else
+            (local.set $a (i32.load8_u (local.get $byte_addr_a)))
+            (local.set $b (i32.load8_u (local.get $byte_addr_b)))
+          )
+        )
+        (br $comp_loop)
+      )
+    )
+
+    ;; 4. Клади финальный стейт на стек в документированном (с багом) порядке Java: push(b), затем push(a)
+    (call $push (local.get $b))
+    (call $push (local.get $a))
+  )
+
+  ;; ========================================================
+  ;; Инструкция RCHK (Опкод 0xF5) — Проверка индекса в диапазоне [j .. i]
+  ;; ========================================================
+  (func (export "ir_RCHK")
+    (local $i i32)  ;; Верхняя граница (high), извлекается первым
+    (local $j i32)  ;; Нижняя граница (low), извлекается вторым
+    (local $k i32)  ;; Индекс (val), извлекается третьим
+
+    ;; Извлекаем параметры со стека выражений в строгом порядке Java
+    (local.set $i (call $pop))
+    (local.set $j (call $pop))
+    (local.set $k (call $pop))
+
+    ;; if (k >= j && k <= i) push(1) else push(0)
+    (if (i32.and
+          (i32.ge_s (local.get $k) (local.get $j))
+          (i32.le_s (local.get $k) (local.get $i))
+        )
+      (then (call $push (i32.const 1)))
+      (else (call $push (i32.const 0)))
+    )
+  )
+
+  ;; ========================================================
+  ;; Инструкция RCHZ (Опкод 0xF6) — Проверка индекса в диапазоне [0 .. i]
+  ;; ========================================================
+  (func (export "ir_RCHZ")
+    (local $i i32)  ;; Верхняя граница (high), извлекается первым
+    (local $k i32)  ;; Индекс (val), извлекается вторым
+
+    ;; Извлекаем параметры со стека выражений в строгом порядке Java
+    (local.set $i (call $pop))
+    (local.set $k (call $pop))
+
+    ;; if (k >= 0 && k <= i) push(1) else push(0)
+    (if (i32.and
+          (i32.ge_s (local.get $k) (i32.const 0))
+          (i32.le_s (local.get $k) (local.get $i))
+        )
+      (then (call $push (i32.const 1)))
+      (else (call $push (i32.const 0)))
+    )
+  )
+
 ) ;; module end

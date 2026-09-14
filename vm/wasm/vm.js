@@ -1,7 +1,10 @@
 import wabt from "wabt";
 import {VirtualMemory, IPT, P, H, IR, F, G, PC, S, SP, M, L, CODE, STACK} from './mem.js'
-import { readFile } from 'fs/promises'
+import {readFile, stat} from 'fs/promises'
 import * as path from "node:path";
+import {VirtualSerial} from "./serial.js";
+import * as fs from "node:fs/promises";
+import * as readline from "node:readline";
 const AStackSize = 15
 
 export class VirtualMachine {
@@ -10,11 +13,19 @@ export class VirtualMachine {
     wabt
     vm
     stepIdx
+    diskOpLater
+    trace
+    bTimer
+    bTimerDescr
 
     constructor(memorySizeBytes, console) {
         this.disks = [];
         this.memory = new VirtualMemory(memorySizeBytes);
         this.console = console;
+        this.serial = new VirtualSerial();
+        this.diskOpLater = [];
+        this.trace = [];
+        this.bTimer = false;
     }
 
     getMemory() {
@@ -33,29 +44,120 @@ export class VirtualMachine {
         return this.disks[diskIdx];
     }
 
+    async loadTrace() {
+        let trace = [];
+        if (process.env.KRONOS_TRACE) {
+            try {
+                await stat(process.env.KRONOS_TRACE);
+                const file = await fs.open(process.env.KRONOS_TRACE, 'r');
+                const rl = readline.createInterface({
+                    input: file.createReadStream(),
+                    crlfDelay: Infinity
+                });
+                let minStep = Number.MAX_VALUE;
+                for await (const line of rl) {
+                    if (line.startsWith("Step =")){
+                        let lineRet = {}
+                        let lineValues = line.split(", ")
+                        for (let lineValue of lineValues){
+                            let lv = lineValue.split(" = ")
+                            if (lv[0] === "PC" || lv[0] === "IR") {
+                                lineRet[lv[0]] = parseInt(lv[1], 16)
+                            } else {
+                                lineRet[lv[0]] = parseInt(lv[1])
+                            }
+                        }
+                        trace.push(lineRet);
+                        minStep = Math.min(lineRet['Step'], minStep);
+                    }
+                }
+                console.log(`loaded ${trace.length} traces starting from ${minStep}`);
+                for (let missedStep = 0; missedStep < minStep; missedStep++) {
+                    trace.unshift(null);
+                }
+            } catch (e) {
+                throw e;
+            }
+        }
+        return trace;
+    }
+
     async runSafe() {
         try {
             await this.run()
         } catch (e) {
+            clearInterval(this.bTimerDescr)
             console.error(e);
         }
     }
 
     async run() {
+        this.trace = await this.loadTrace();
         this.wabt = await wabt();
         await this.start()
         let badIrq = false;
         while (!badIrq) {
             badIrq = await this.step()
-            this.clearStack()
+            for (let op of this.diskOpLater) {
+                await op();
+            }
+            this.diskOpLater.splice(0, this.diskOpLater.length);
+            if(!badIrq) {
+                this.checkTrace()
+                this.clearStack()
+            }
         }
         this.stop();
     }
 
+    checkTrace() {
+        if (this.trace.length === 0) {
+            return
+        }
+        let stepTrace = this.trace.shift()
+        if (stepTrace == null) {
+            return;
+        }
+        if (stepTrace['Step'] != this.stepIdx - 1) {
+            debugger
+        }
+        if (stepTrace['IR'] != this.memory.getReg(IR)){
+            debugger
+        }
+    }
+
     irq() {
         let ipt = this.memory.getReg(IPT)
+        let m = this.memory.getReg(M)
         if (ipt === 0) {
-            //TODO
+            if (this.memory.isOutOfRange())
+                ipt = 3;
+            else if (this.bTimer)
+            {
+                if ((m & 0x2) !== 0)
+                {
+                    this.bTimer = false;
+                    ipt = 1; // timer ipt
+                }
+            }
+            else if ((m & 0x1) !== 0)
+            {
+                //SIO *s = sios.inpReady();
+
+                // if (s != NULL)
+                //     Ipt = s->ipt();
+                // else
+                // {
+                //     s = sios.outReady();
+                //     if (s != NULL)
+                //         Ipt = s->ipt() + 1;
+                // }
+                if (this.console.isInpIptEnabled()) {
+                    ipt = this.console.getIpt();
+                } else if (this.console.isOutIptEnabled()) {
+                    ipt = this.console.getIpt() + 1;
+                }
+            }
         }
         if (ipt !== 0) {
             this.trap(ipt)
@@ -146,6 +248,7 @@ export class VirtualMachine {
     }
 
     stop() {
+        clearInterval(this.bTimerDescr)
         this.saveRegisters()
     }
 
@@ -161,7 +264,6 @@ export class VirtualMachine {
         const { buffer } = parsedModule.toBinary({ log: true, canonicalize_lebs: true });
         let that = this;
         const wasmModule = await WebAssembly.compile(buffer);
-        console.log(wasmModule.log);
         const wasmInstance = await WebAssembly.instantiate(wasmModule, {
             env: {
                 memory: this.memory.memory,
@@ -170,14 +272,33 @@ export class VirtualMachine {
                     console.log(`   [Wasm Debug ${id}] output: ${hexVal}`);
                 },
                 io_host_call: function(port) {
-                    console.log(`[JS Host I/O] Вызвана инструкция IO. Номер порта: ${port}`);
+                    //console.log(`[JS Host I/O] Вызвана инструкция IO. Номер порта: ${port}`);
                     // Сюда добавим логику взаимодействия со стеком/памятью, когда она прояснится
                     that.io(port)
+                },
+                tra_host_call: function(p_to, p_from) {
+                    that.transfer(p_to, p_from);
+                },
+                sys_print_hex: function(value) {
+                    // Превращаем в беззнаковый хекс, дополняем нулями до 8 знаков и переводим в верхний регистр
+                    const hexStr = (value >>> 0).toString(16).toUpperCase().padStart(8, '0');
+                    console.log(`\n${hexStr}`);
+                },
+                save_stack_host_call: function() {
+                    // Вызываем ваш мигрированный метод saveStack из Java
+                    that.saveStack();
+                },
+                restore_stack_host_call: function() {
+                    // Вызываем ваш мигрированный метод restoreStack из Java
+                    that.restoreStack();
                 }
-        }});
+            }});
 
         this.vm = wasmInstance.exports;
         this.vm.init_vm(this.memory.totalPages, AStackSize)
+        this.bTimerDescr = setInterval(() => {
+            //this.bTimer = true;
+        }, 100)
     }
 
     saveRegisters() {
@@ -200,7 +321,7 @@ export class VirtualMachine {
         this.memory.setReg(this.memory.load32(this.memory.getReg(P) + 3), M)
         this.memory.setReg(this.memory.load32(this.memory.getReg(P) + 4), S)
         this.memory.setReg(this.memory.load32(this.memory.getReg(P) + 5), H)
-        this.memory.setReg(this.memory.getReg(H) - AStackSize + 1, H)
+        this.memory.setReg(this.memory.getReg(H) - (AStackSize + 1), H)
         this.restoreStack()
     }
 
@@ -230,7 +351,7 @@ export class VirtualMachine {
 
     push(i32) {
         let sp = this.memory.getReg(SP)
-        if (sp <= 0 && sp < AStackSize) {
+        if (sp >= 0 && sp < AStackSize) {
             this.memory.setReg(i32, STACK + sp)
             this.memory.setReg(sp + 1, SP)
         } else {
@@ -287,11 +408,14 @@ export class VirtualMachine {
                 let sec = this.pop();    // sector
                 let dsk = this.pop();    // disk
                 let op = this.pop();    // operation
-                this.push(this.doDiskOperation(op, dsk, sec, adr, len));
+                this.diskOpLater.push(async () => {
+                    let ret = await this.doDiskOperation(op, dsk, sec, adr, len);
+                    this.push(ret);
+                })
                 break;
             }
             case 0x3: {
-                console.log(String.format("%c", this.pop()));
+                console.log("no io3", this.pop());
                 break;
             }
             case 0x4: {
@@ -310,7 +434,7 @@ export class VirtualMachine {
         }
     }
 
-    doDiskOperation(op, dsk, sec, adr, len) {
+    async doDiskOperation(op, dsk, sec, adr, len) {
         switch (op)
         {
         case 1:
@@ -339,8 +463,8 @@ export class VirtualMachine {
             return 0;
         case 4:
             if (dsk >= 0 && dsk < this.disks.length) {
-                let data = this.disks[dsk].read(sec * 512, len);
-                this.memory.store8n(adr, data)
+                let data = await this.disks[dsk].read(sec * 512, len);
+                this.memory.store8n(adr * 4, len, data)
                 return data.length === len ? 1 : 0;
             }
             return 0;
@@ -577,7 +701,7 @@ const IR_MAP = {
     "BE": "ORJP",
     "BF": "ANDJP",
     "C0": "MOVE",
-    "C1": "**CHKNIL",
+    "C1": "CHKNIL",
     "C2": "LSTA",
     "C3": "COMP",
     "C4": "GB",
@@ -623,21 +747,21 @@ const IR_MAP = {
     "EC": "**BBU",
     "ED": "**BBP",
     "EE": "**BBLT",
-    "EF": "**PDX",
+    "EF": "PDX",
     "F0": "SWAP",
     "F1": "LPA",
     "F2": "LPW",
     "F3": "SPW",
     "F4": "SSWU",
-    "F5": "**RCHK",
-    "F6": "**RCHZ",
-    "F7": "**CM",
-    "F8": "*CHKBX",
-    "F9": "*BMG",
+    "F5": "RCHK",
+    "F6": "RCHZ",
+    "F7": "CM",
+    "F8": "CHKBX",
+    "F9": "BMG",
     "FA": "ACTIV",
     "FB": "USR",
     "FC": "SYS",
-    "FD": "**NII",
+    "FD": "NII",
     "FE": "DOT",
     "FF": "INVLD"
 }

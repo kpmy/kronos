@@ -1,5 +1,7 @@
 package inn.ocsf.kronos4j.vm;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import org.apache.commons.collections4.map.ListOrderedMap;
 import org.apache.commons.collections4.queue.CircularFifoQueue;
 import org.apache.commons.csv.CSVFormat;
@@ -19,6 +21,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 public class VirtualMachine {
+
+    private static final Logger LOG =  LoggerFactory.getLogger(VirtualMachine.class);
 
     public static final String M_CODE_TABLE = """
             --   00     20      40      60      80     A0     C0     E0
@@ -94,6 +98,13 @@ public class VirtualMachine {
         } catch (IOException e) {
             throw new RuntimeException(e);
         };
+
+        Gson gson = new GsonBuilder()
+            .setPrettyPrinting()
+            .create();
+
+        String codes = gson.toJson(MCODES);
+        LOG.trace(codes);
     }
 
     public static final int AStackSize = 15;
@@ -1829,12 +1840,12 @@ public class VirtualMachine {
         restoreRegisters();
     }
 
-    private int pop() {
-        if (sp > 0)
-            return astack[--sp];
-        ipt = 0x4C;
-        return 0;
-    }
+        private int pop() {
+            if (sp > 0)
+                return astack[--sp];
+            ipt = 0x4C;
+            return 0;
+        }
 
     /*
      * int of four byte

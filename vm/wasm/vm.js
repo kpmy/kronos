@@ -67,7 +67,7 @@ export class VirtualMachine {
         try {
             return irFunc();
         } catch (e) {
-            console.error(e);
+            console.error(irCode, irName, e);
             return true;
         }
     }

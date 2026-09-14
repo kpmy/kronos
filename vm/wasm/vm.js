@@ -9,10 +9,12 @@ export class VirtualMachine {
     disks
     wabt
     vm
+    stepIdx
 
-    constructor(memorySizeBytes) {
+    constructor(memorySizeBytes, console) {
         this.disks = [];
         this.memory = new VirtualMemory(memorySizeBytes);
+        this.console = console;
     }
 
     getMemory() {
@@ -51,7 +53,61 @@ export class VirtualMachine {
     }
 
     irq() {
+        let ipt = this.memory.getReg(IPT)
+        if (ipt === 0) {
+            //TODO
+        }
+        if (ipt !== 0) {
+            this.trap(ipt)
+            ipt = 0;
+        }
+        this.memory.setReg(ipt, IPT)
         return true;
+    }
+
+    trap(no) {
+        if (no === 7)
+            this.bDebug = true;
+
+        if (no >= 0x3F)
+        {
+            this.memory.store32(this.memory.getReg(P) + 6,  no);
+            no = 0x3F;
+        }
+        if (no === 0)
+        {
+            this.trap(6);
+            return;
+        }
+        let m = this.memory.getReg(M);
+        if (no >= 0xC && no < 0x3F && (m & 0x1) === 0)
+            return;
+        if (no >= 2 && no < 0xC)
+        {
+            this.memory.store32(this.memory.getReg(P) + 6,  no);
+            if ((m & Number(BigInt.asIntN(32, 1n << BigInt(no) & 0xFFFFFFFFn))) === 0)
+            {
+                if (no !== 3) // booter use Ipt 3 to determine memory size
+                {
+                    //log.error("Unexpected interrupt {}.\n", no);
+                    this.bDebug = true;
+                }
+                return;
+            }
+        }
+        if (no === 1  && (m & 0x2) === 0)
+            return;
+        if (no === 0x3F && (m & (1 << 31)) === 0)
+            return;
+        this.transfer(no * 2, this.memory.load32(no * 2 + 1));
+    }
+
+    transfer(p_to, p_from) {
+        let i = this.memory.load32(p_to);
+        this.memory.store32(p_from, this.memory.getReg(P));
+        this.saveRegisters();
+        this.memory.setReg(i, P);
+        this.restoreRegisters();
     }
 
     async step() {
@@ -65,15 +121,28 @@ export class VirtualMachine {
         let irName = IR_MAP[irCode];
         let irFunc = this.vm[`ir_${irName}`];
         try {
-            return irFunc();
+            irFunc();
         } catch (e) {
-            console.error(irCode, irName, e);
+            console.error(this.stepIdx, irCode, irName, e);
+            this.memory.setReg(0x7, IPT)
             return true;
         }
+        if (this.memory.getReg(IPT) === 0 && this.memory.getReg(S) > this.memory.getReg(H) || this.memory.getReg(S) === 0) {
+            throw 'out of stack';
+        }
+        this.stepIdx++;
+        return false
     }
 
     clearStack() {
+        // 1. Получаем текущий индекс вершины стека выражений (sp)
+        const sp = this.memory.getReg(SP);
 
+        // 2. Пробегаемся циклом от текущего sp до максимального размера AStackSize
+        for (let t = sp; t < AStackSize; t++) {
+            // 3. Зануляем ячейку в WebAssembly.Memory по гостевому индексу (STACK + t)
+            this.memory.setReg(0, STACK + t);
+        }
     }
 
     stop() {
@@ -81,6 +150,7 @@ export class VirtualMachine {
     }
 
     async start() {
+        this.stepIdx = 0;
         this.memory.setReg(0, IPT)
         this.memory.setReg(0, SP)
         this.memory.setReg(this.memory.load32(1), P)
@@ -88,15 +158,21 @@ export class VirtualMachine {
 
         const wastCode = await readFile(path.join(process.cwd(), 'core.wat'), 'utf-8')
         const parsedModule = this.wabt.parseWat('core.wat', wastCode);
-        const { buffer } = parsedModule.toBinary({ log: false, canonicalize_lebs: true });
-
+        const { buffer } = parsedModule.toBinary({ log: true, canonicalize_lebs: true });
+        let that = this;
         const wasmModule = await WebAssembly.compile(buffer);
+        console.log(wasmModule.log);
         const wasmInstance = await WebAssembly.instantiate(wasmModule, {
             env: {
                 memory: this.memory.memory,
                 log_debug: function (id, value) {
                     const hexVal = "0x" + (value >>> 0).toString(16).toUpperCase();
                     console.log(`   [Wasm Debug ${id}] output: ${hexVal}`);
+                },
+                io_host_call: function(port) {
+                    console.log(`[JS Host I/O] Вызвана инструкция IO. Номер порта: ${port}`);
+                    // Сюда добавим логику взаимодействия со стеком/памятью, когда она прояснится
+                    that.io(port)
                 }
         }});
 
@@ -172,6 +248,138 @@ export class VirtualMachine {
         }
         this.memory.setReg(0x4C, IPT);
         return 0;
+    }
+
+    io(no) {
+        switch (no) {
+            case 0x0: { //input
+                let adr = this.pop();
+                let ioAddr = adr & 0xFFC;
+                if (ioAddr === this.console.getAddress()) { // console ipt 0x0C
+                    this.push(this.console.inp(adr));
+                } else {
+                    let inp = this.serial.inp(no, ioAddr, adr);
+                    if (inp != null) {
+                        this.push(inp);
+                    } else {
+                        this.memory.setReg(3, IPT);
+                        this.push(0);
+                    }
+                    //throw new NotImplementedException(String.format("in %x %x", no, ioAddr));
+                }
+                break;
+            }
+            case 0x1: { //output
+                let i = this.pop();
+                let adr = this.pop();
+                let ioAddr = adr & 0xFFC;
+                if (ioAddr === this.console.getAddress()) {
+                    this.console.out(adr, i);
+                } else {
+                    this.serial.out(no, ioAddr, adr, i);
+                    //throw new NotImplementedException(String.format("out %x %x", no, ioAddr));
+                }
+                break;
+            }
+            case 0x2: { //disk io
+                let len = this.pop();    // bytes
+                let adr = this.pop();    // address
+                let sec = this.pop();    // sector
+                let dsk = this.pop();    // disk
+                let op = this.pop();    // operation
+                this.push(this.doDiskOperation(op, dsk, sec, adr, len));
+                break;
+            }
+            case 0x3: {
+                console.log(String.format("%c", this.pop()));
+                break;
+            }
+            case 0x4: {
+                this.memory.setReg(7, IPT);
+                let pc = this.memory.getReg(PC);
+                this.memory.setReg(pc - 2, PC);
+                break;
+            }
+            default:
+                console.log("unsupported i/o function", String.format("%03X", no));
+                this.memory.setReg(7, IPT);
+                let pc = this.memory.getReg(PC);
+                this.memory.setReg(pc - 2, PC);
+            //break;
+            //throw new NotImplementedException(String.format("unknown io channel %x", no));
+        }
+    }
+
+    doDiskOperation(op, dsk, sec, adr, len) {
+        switch (op)
+        {
+        case 1:
+            if (dsk >= 0 && dsk < this.disks.length) {
+                if (this.disks[dsk].isMounted()){
+                    //do nothing
+                }
+                this.disks[dsk].setMounted(true);
+                return 1;
+            }
+            return 0;
+        case 2:
+            if (dsk >= 0 && dsk < this.disks.length) {
+                if (!this.disks.get[dsk].isMounted()){
+                    //do nothing
+                }
+                this.disks[dsk].setMounted(false);
+                return 1;
+            }
+            return 0;
+        case 3:
+            if (dsk >= 0 && dsk < this.disks.length) {
+                this.memory.store32(adr, this.disks[dsk].getSize4Kb());
+                return 1;
+            }
+            return 0;
+        case 4:
+            if (dsk >= 0 && dsk < this.disks.length) {
+                let data = this.disks[dsk].read(sec * 512, len);
+                this.memory.store8n(adr, data)
+                return data.length === len ? 1 : 0;
+            }
+            return 0;
+        case 5:
+            if (dsk >= 0 && dsk < this.disks.length) {
+                //return Disks.Write(dsk, sec, &mem[adr], len);
+            }
+            throw "io write not implemented";
+            //return 0;
+        case 6: {
+            const now = new Date();
+            this.memory.store32(adr++, now.getFullYear());        // year (e.g., 2025)
+            this.memory.store32(adr++, now.getMonth() + 1);       // month 1–12 (JS months are 0‑based)
+            this.memory.store32(adr++, now.getDate());            // day of month 1–31
+            this.memory.store32(adr++, now.getHours());           // hour 0–23
+            this.memory.store32(adr++, now.getMinutes());         // minute 0–59
+            this.memory.store32(adr++, now.getSeconds());         // second 0–59
+
+            return 1;
+        }
+        case 8: // getspecs
+            if (dsk >= 0 && dsk < this.disks.length) {
+                //var p_spec = pmem(adr);
+                //p_spec.setValues(disks.get(dsk).getSpecs().asBytes());
+
+            }
+            return 0;
+        case 9: // setspecs
+            if (dsk >= 0 && dsk < this.disks.length) {
+
+            }
+            //throw new NotImplementedException();
+            return 1;
+            //return Disks.SetSpecs(dsk, (Request*)(byte*)&mem[adr]);
+        default:
+            //trace("invalid disk operation: %d\n", op);
+            //throw new NotImplementedException();
+            return 0;
+        }
     }
 }
 

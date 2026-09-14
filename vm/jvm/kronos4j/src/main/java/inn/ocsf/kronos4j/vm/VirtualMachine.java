@@ -162,7 +162,7 @@ public class VirtualMachine {
     private void startTimer() {
         scheduler = Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(() -> {
-            bTimer = true;
+            //bTimer = true;
         }, 0, 100, TimeUnit.MILLISECONDS);
     }
 
@@ -280,7 +280,8 @@ public class VirtualMachine {
             }
             irCountMap.put(ir, irCount+1);
         }
-
+        String irCode = String.format("%02X",  ir);
+        String irName = MCODES.get(ir);
         switch (ir) {
             case 0x0: case 0x1: case 0x2: case 0x3:
             case 0x4: case 0x5: case 0x6: case 0x7:

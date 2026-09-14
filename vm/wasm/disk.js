@@ -16,4 +16,12 @@ export class VirtualDisk {
     async read(offset, length) {
         return this.fileBuffer.subarray(offset, length)
     }
+
+    isMounted() {
+        return true;
+    }
+
+    setMounted(ok){
+        return true
+    }
 }

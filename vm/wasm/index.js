@@ -2,6 +2,7 @@ import 'dotenv/config';
 import {VirtualMachine} from "./vm.js";
 import { stat } from 'fs/promises';
 import {VirtualDisk} from "./disk.js";
+import {VirtualConsole} from "./cons.js";
 
 const MEMORY_SIZE = 4 * 1024 * 1024;
 
@@ -26,7 +27,10 @@ let readBooter = async (vm, diskNo) => {
 }
 
 (async () => {
-    let vm = new VirtualMachine(MEMORY_SIZE);
+    //process.stdin.setRawMode(true);
+    //process.stdin.resume();
+    //process.stdin.setEncoding('utf8'); //TODO
+    let vm = new VirtualMachine(MEMORY_SIZE, new VirtualConsole(0xFB8, 0x0C));
     await addDisks(vm)
     if (vm.getDiskCount() > 1) {
         await readBooter(vm, 1);

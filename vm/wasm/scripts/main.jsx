@@ -22,11 +22,11 @@ async function initVirtualMachine(term) {
 
     let vm = new VirtualMachine(MEMORY_SIZE, new VirtualWebConsole(term, 0xFB8, 0x0C));
     vm.core = wasmModule;
-    await Promise.all(Array.from([await loadStaticAsFile('assets/disks/xd0.dsk'), await loadStaticAsFile('assets/disks/xd1.dsk'), await loadStaticAsFile('assets/disks/xd2.dsk')]).map(async (dsk) => {
+    for (let dsk of Array.from([await loadStaticAsFile('assets/disks/xd0.dsk'), await loadStaticAsFile('assets/disks/xd1.dsk'), await loadStaticAsFile('assets/disks/xd2.dsk')])) {
         let disk = new VirtualWebDisk(dsk);
         await disk.load()
         vm.addDisk(disk);
-    }))
+    }
     await vm.readBooter(1);
     return vm;
 }

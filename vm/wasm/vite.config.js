@@ -9,7 +9,7 @@ export default defineConfig({
             targets: [
                 {
                     // Путь к файлу вне проекта (поднимитесь на уровень выше через ../)
-                    src: [normalizePath(path.resolve(import.meta.dirname, '../../disks/xd0.dsk')), normalizePath(path.resolve(import.meta.dirname, '../../disks/xd1.dsk'))],
+                    src: [normalizePath(path.resolve(import.meta.dirname, '../../disks/xd0.dsk')), normalizePath(path.resolve(import.meta.dirname, '../../disks/xd1.dsk')), normalizePath(path.resolve(import.meta.dirname, '../../disks/xd2.dsk'))],
                     // Куда положить внутри сборки dist/ (например, dist/external/)
                     dest: 'assets'
                 }

@@ -4,8 +4,11 @@ import org.apache.commons.lang3.NotImplementedException;
 import org.jline.terminal.Terminal;
 import org.jline.terminal.TerminalBuilder;
 import org.jline.utils.NonBlockingReader;
+import java.io.PrintStream;
 
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 
 public class VirtualConsoleSystem implements VirtualConsole {
     private static final int EMPTY_CHAR = 512;
@@ -15,16 +18,40 @@ public class VirtualConsoleSystem implements VirtualConsole {
     private boolean outIptEnabled = false;
     private boolean inpIptEnabled = false;
     private int inChar;
-    private Terminal terminal;
-    private NonBlockingReader reader;
+    private final NonBlockingReader reader;
 
     public VirtualConsoleSystem(int address, int ipt) throws IOException {
         this.address = address;
         this.ipt = ipt;
         inChar = EMPTY_CHAR;
-        terminal = TerminalBuilder.builder().jna(true).system(true).build();
+        Terminal terminal = TerminalBuilder.builder().jna(true).system(true).build();
         terminal.enterRawMode();
         reader = terminal.reader();
+    }
+
+    // Создаем отдельный поток вывода, который СТРОГО форсирует UTF-8 наружу
+    private static final PrintStream outUtf8 = new PrintStream(System.out, true, StandardCharsets.UTF_8);
+
+    public static void printGuestChar(int value) {
+        // 1. Стандартный ASCII (латиницу и управляющие) выводим как обычно
+        if (value <= 127) {
+            outUtf8.print((char) value);
+            return;
+        }
+
+        try {
+            // 2. Однобайтовый кириллический байт Кроноса
+            byte[] singleByte = new byte[]{(byte) value};
+
+            // Честно переводим KOI8-R байт в универсальную Java-строку (Unicode)
+            String decodedStr = new String(singleByte, "KOI8-R");
+
+            // Выводим строку через наш UTF-8 поток
+            outUtf8.print(decodedStr);
+        } catch (UnsupportedEncodingException e) {
+            // Фолбэк на случай непредвиденных сбоев
+            outUtf8.print((char) value);
+        }
     }
 
     @Override
@@ -61,7 +88,7 @@ public class VirtualConsoleSystem implements VirtualConsole {
             case 0: inpIptEnabled = (value & 0100) != 0;    break;
             case 1:                                         break;
             case 2: outIptEnabled = (value & 0100) != 0;    break;
-            case 3: System.out.print((char)value);             break;
+            case 3: printGuestChar(value); break; //System.out.print((char)value);             break;
         }
     }
 

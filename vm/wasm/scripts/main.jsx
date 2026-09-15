@@ -17,12 +17,12 @@ import {VirtualWebDisk} from "../disk-web.js";
 async function initVirtualMachine(term) {
     const MEMORY_SIZE = 4 * 1024 * 1024;
 
-    const response = await fetch('/assets/core.wasm');
+    const response = await fetch('assets/core.wasm');
     const wasmModule = await WebAssembly.compile(await response.arrayBuffer());
 
     let vm = new VirtualMachine(MEMORY_SIZE, new VirtualWebConsole(term, 0xFB8, 0x0C));
     vm.core = wasmModule;
-    await Promise.all(Array.from([await loadStaticAsFile('/assets/disks/xd0.dsk'), await loadStaticAsFile('/assets/disks/xd1.dsk')]).map(async (dsk) => {
+    await Promise.all(Array.from([await loadStaticAsFile('assets/disks/xd0.dsk'), await loadStaticAsFile('assets/disks/xd1.dsk')]).map(async (dsk) => {
         let disk = new VirtualWebDisk(dsk);
         await disk.load()
         vm.addDisk(disk);

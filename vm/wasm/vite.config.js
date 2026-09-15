@@ -16,6 +16,7 @@ export default defineConfig({
         ]})],
     publicDir: './public',
     assetsInclude: ['**/*.wasm'],
+    base: '/kronos/',
     esbuild: {
         jsx: 'transform',
         // Говорим сборщику использовать фабрику Mithril (m) для JSX

@@ -1,0 +1,25 @@
+/* Локальный шрифт Roboto */
+@import "@fontsource/roboto/300.css";
+@import "@fontsource/roboto/400.css";
+@import "@fontsource/roboto/500.css";
+@import "@fontsource/roboto/700.css";
+
+/* Локальные иконки Material Symbols */
+@import "@fontsource/material-symbols-outlined/index.css";
+
+/* Подключаем базовые стили xterm.js */
+@import "xterm/css/xterm.css";
+
+body {
+    font-family: 'Roboto', system-ui, sans-serif;
+}
+
+/* Настройка контейнера для терминала */
+.terminal-container {
+    max-width: 800px;
+    margin: 2rem auto;
+    padding: 10px;
+    background: #000;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}

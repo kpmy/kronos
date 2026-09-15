@@ -1,20 +1,16 @@
-import wabt from "wabt";
 import {VirtualMemory, IPT, P, H, IR, F, G, PC, S, SP, M, L, CODE, STACK} from './mem.js'
-import {readFile, stat} from 'fs/promises'
-import * as path from "node:path";
 import {VirtualSerial} from "./serial.js";
-import * as fs from "node:fs/promises";
-import * as readline from "node:readline";
 const AStackSize = 15
 
 export class VirtualMachine {
+    core
     memory
     disks
-    wabt
     vm
     stepIdx
     diskOpLater
     trace
+    traceFn
     bTimer
     bTimerDescr
 
@@ -26,6 +22,12 @@ export class VirtualMachine {
         this.diskOpLater = [];
         this.trace = [];
         this.bTimer = false;
+    }
+
+    async readBooter (diskNo) {
+        let disk = this.getDisk(diskNo);
+        let boot = await disk.read(0, 4096)
+        this.getMemory().store8n(0, 4096, boot)
     }
 
     getMemory() {
@@ -44,42 +46,6 @@ export class VirtualMachine {
         return this.disks[diskIdx];
     }
 
-    async loadTrace() {
-        let trace = [];
-        let minStep = Number.MAX_VALUE;
-        if (process.env.KRONOS_TRACE) {
-            try {
-                await stat(process.env.KRONOS_TRACE);
-                const file = await fs.open(process.env.KRONOS_TRACE, 'r');
-                const rl = readline.createInterface({
-                    input: file.createReadStream(),
-                    crlfDelay: Infinity
-                });
-                for await (const line of rl) {
-                    if (line.startsWith("Step =")){
-                        let lineRet = {}
-                        let lineValues = line.split(", ")
-                        for (let lineValue of lineValues){
-                            let lv = lineValue.split(" = ")
-                            if (lv[0] === "PC" || lv[0] === "IR") {
-                                lineRet[lv[0]] = parseInt(lv[1], 16)
-                            } else {
-                                lineRet[lv[0]] = parseInt(lv[1])
-                            }
-                        }
-                        trace.push(lineRet);
-                        minStep = Math.min(lineRet['Step'], minStep);
-                    }
-                }
-                console.log(`loaded ${trace.length} traces starting from ${minStep}`);
-            } catch (e) {
-                throw e;
-            }
-        }
-        this.trace =  trace;
-        this.traceMinStep = minStep;
-    }
-
     async runSafe() {
         try {
             await this.run()
@@ -90,8 +56,6 @@ export class VirtualMachine {
     }
 
     async run() {
-        await this.loadTrace();
-        this.wabt = await wabt();
         await this.start()
         let badIrq = false;
         while (!badIrq) {
@@ -112,25 +76,8 @@ export class VirtualMachine {
     }
 
     checkTrace() {
-        if (this.trace.length === 0) {
-            if (!process.env.KRONOS_TRACE) {
-                return
-            } else {
-                throw 'empty trace...'
-            }
-        }
-        if(this.stepIdx - 1 < this.traceMinStep){
-            return;
-        }
-        let stepTrace = this.trace.shift()
-        if (stepTrace == null) {
-            return;
-        }
-        if (stepTrace['Step'] != this.stepIdx - 1) {
-            debugger
-        }
-        if (stepTrace['IR'] != this.memory.getReg(IR)){
-            debugger
+        if (this.traceFn) {
+            this.traceFn();
         }
     }
 
@@ -270,12 +217,8 @@ export class VirtualMachine {
         this.memory.setReg(this.memory.load32(1), P)
         this.restoreRegisters()
 
-        const wastCode = await readFile(path.join(process.cwd(), 'core.wat'), 'utf-8')
-        const parsedModule = this.wabt.parseWat('core.wat', wastCode);
-        const { buffer } = parsedModule.toBinary({ log: true, canonicalize_lebs: true });
         let that = this;
-        const wasmModule = await WebAssembly.compile(buffer);
-        const wasmInstance = await WebAssembly.instantiate(wasmModule, {
+        const wasmInstance = await WebAssembly.instantiate(this.core, {
             env: {
                 memory: this.memory.memory,
                 log_debug: function (id, value) {

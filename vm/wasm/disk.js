@@ -1,10 +1,12 @@
 import { readFile } from 'fs/promises'
+import {VirtualBufferDisk} from "./disk-buffer.js";
 
-export class VirtualDisk {
+export class VirtualDisk extends VirtualBufferDisk {
     filePath;
-    fileBuffer;
+
 
     constructor(filePath) {
+        super();
         this.filePath = filePath;
     }
 
@@ -13,19 +15,4 @@ export class VirtualDisk {
         this.fileBuffer = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
     }
 
-    async read(offset, length) {
-        return this.fileBuffer.subarray(offset, offset + length)
-    }
-
-    isMounted() {
-        return true;
-    }
-
-    setMounted(ok){
-        return true
-    }
-
-    getSize4Kb() {
-        return this.fileBuffer.byteLength / (4 * 1024);
-    }
 }

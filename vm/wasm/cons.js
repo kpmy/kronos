@@ -1,29 +1,5 @@
 export const EMPTY_CHAR = 512;
 
-// Хак-конвертер для подбора кодировки Кроноса
-function writeGuestChar(value) {
-    // 1. Если это стандартный ASCII (0-127), выводим как есть (латиница, цифры, системные символы)
-    if (value <= 127) {
-        process.stdout.write(String.fromCharCode(value));
-        return;
-    }
-
-    // 2. Набор наиболее вероятных однобайтовых кириллических кодировок для Kronos/Excelsior:
-    // Попробуйте менять индекс ('koi8-r', 'ibm866', 'windows-1251', 'iso-8859-5')
-    const targetEncoding = 'koi8-r'; // <-- Поменяйте здесь, если текст останется "кракозябрами"
-
-    try {
-        const uint8Array = new Uint8Array([value]);
-        const decoder = new TextDecoder(targetEncoding);
-        const decodedChar = decoder.decode(uint8Array);
-
-        process.stdout.write(decodedChar);
-    } catch (e) {
-        // Фолбэк, если TextDecoder не сдюжил
-        process.stdout.write(Buffer.from([value]));
-    }
-}
-
 export class VirtualConsole {
 
     address
@@ -41,26 +17,38 @@ export class VirtualConsole {
         this.inpIptEnabled = false
         this.outIptEnabled = false
         this.inChar = EMPTY_CHAR
+    }
 
-        if (process.stdin.isTTY) {
-            process.stdin.setRawMode(true);
+    read(input) {
+        this.inputQueue.push(input);
+    }
+
+    write(output) {
+
+    }
+
+    // Хак-конвертер для подбора кодировки Кроноса
+    _writeGuestChar(value) {
+        // 1. Если это стандартный ASCII (0-127), выводим как есть (латиница, цифры, системные символы)
+        if (value <= 127) {
+            this.write(String.fromCharCode(value));
+            return;
         }
-        process.stdin.resume();
-        process.stdin.setEncoding('utf8');
 
-        // Слушаем ввод от пользователя
-        process.stdin.on('data', (key) => {
-            // Обработка Ctrl+C для штатного выхода из эмулятора
-            if (key === '\u0003') {
-                console.log("\n[JS Host] terminated (Ctrl+C)...");
-                process.exit();
-            }
+        // 2. Набор наиболее вероятных однобайтовых кириллических кодировок для Kronos/Excelsior:
+        // Попробуйте менять индекс ('koi8-r', 'ibm866', 'windows-1251', 'iso-8859-5')
+        const targetEncoding = 'koi8-r'; // <-- Поменяйте здесь, если текст останется "кракозябрами"
 
-            // Переводим символ в ASCII код и кладем в очередь
-            const charCode = key.charCodeAt(0);
-            this.inputQueue.push(charCode);
-        });
+        try {
+            const uint8Array = new Uint8Array([value]);
+            const decoder = new TextDecoder(targetEncoding);
+            const decodedChar = decoder.decode(uint8Array);
 
+            this.write(decodedChar);
+        } catch (e) {
+            // Фолбэк, если TextDecoder не сдюжил
+            this.write(Buffer.from([value]));
+        }
     }
 
     getAddress() {
@@ -102,7 +90,7 @@ export class VirtualConsole {
                 case 0: this.inpIptEnabled = (value & 0o100) !== 0;    break;
                 case 1:                                         break;
                 case 2: this.outIptEnabled = (value & 0o100) !== 0;    break;
-                case 3: writeGuestChar(value); break;//process.stdout.write(Buffer.from([value]));             break;
+                case 3: this._writeGuestChar(value); break;//process.stdout.write(Buffer.from([value]));             break;
             }
     }
 

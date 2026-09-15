@@ -1,12 +1,45 @@
 import m from 'mithril';
 import $ from 'cash-dom';
-import { Terminal } from 'xterm';
 
 // Импортируем компоненты Material
 import '@material/web/button/filled-button.js';
 import '@material/web/checkbox/checkbox.js';
+import '@material/web/list/list.js';
+import '@material/web/list/list-item.js';
 
-const wasmUrl = '/assets/core.wasm';
+
+import {Terminal} from 'xterm';
+import {VirtualMachine} from '../vm.js'
+import {VirtualWebConsole} from "../cons-xterm.js";
+import {VirtualWebDisk} from "../disk-web.js";
+
+
+async function initVirtualMachine(term) {
+    const MEMORY_SIZE = 4 * 1024 * 1024;
+
+    const response = await fetch('/assets/core.wasm');
+    const wasmModule = await WebAssembly.compile(await response.arrayBuffer());
+
+    let vm = new VirtualMachine(MEMORY_SIZE, new VirtualWebConsole(term, 0xFB8, 0x0C));
+    vm.core = wasmModule;
+    await Promise.all(Array.from([await loadStaticAsFile('/assets/disks/xd0.dsk'), await loadStaticAsFile('/assets/disks/xd1.dsk')]).map(async (dsk) => {
+        let disk = new VirtualWebDisk(dsk);
+        await disk.load()
+        vm.addDisk(disk);
+    }))
+    await vm.readBooter(1);
+    return vm;
+}
+
+let globalVM;
+
+async function waitVirtualMachine() {
+    if (globalVM) {
+        await globalVM.runSafe()
+    } else {
+        setTimeout(waitVirtualMachine, 1000);
+    }
+}
 
 // Компонент Терминала
 const TerminalComponent = () => {
@@ -14,7 +47,7 @@ const TerminalComponent = () => {
 
     return {
         // oncreate вызывается сразу после того, как Mithril отрендерил HTML в DOM
-        oncreate: (vnode) => {
+        oncreate: async (vnode) => {
             // Используем cash для поиска контейнера терминала внутри нашего компонента
             const $container = $(vnode.dom).find('.terminal-instance');
 
@@ -35,32 +68,7 @@ const TerminalComponent = () => {
                 // Стартовый текст
                 term.writeln('kronos.wasm');
 
-                // Простейшая обработка ввода (Echo-режим)
-                let currentLine = '';
-                term.onData(e => {
-                    switch (e) {
-                        case '\r': // Enter
-                            term.writeln('');
-                            if (currentLine.trim() === 'help') {
-                                term.writeln('Доступные команды: help, clear');
-                            } else if (currentLine.trim() === 'clear') {
-                                term.clear();
-                            } else if (currentLine) {
-                                term.writeln(`Вы ввели: ${currentLine}`);
-                            }
-                            currentLine = '';
-                            break;
-                        case '\u007F': // Backspace (DEL)
-                            if (currentLine.length > 0) {
-                                currentLine = currentLine.slice(0, -1);
-                                term.write('\b \b');
-                            }
-                            break;
-                        default: // Все остальные символы
-                            currentLine += e;
-                            term.write(e);
-                    }
-                });
+                globalVM = await initVirtualMachine(term);
             }
         },
         // Уничтожаем инстанс терминала при удалении компонента, чтобы не было утечек памяти
@@ -79,45 +87,34 @@ const TerminalComponent = () => {
 async function loadStaticAsFile(url, fileName) {
     const response = await fetch(url);
     if (!response.ok) throw new Error(`Ошибка сети: ${response.status}`);
-
     // 1. Получаем Blob (сырые данные с MIME-типом)
     const blob = await response.blob();
-
     // 2. Оборачиваем Blob в стандартный веб-объект File
-    const file = new File([blob], fileName, { type: blob.type });
-
-    return file;
-}
-
-async function fileToUint8Array(fileOrBlob) {
-    // Получаем ArrayBuffer из объекта File или Blob
-    const arrayBuffer = await fileOrBlob.arrayBuffer();
-    // Возвращаем типизированный массив байт
-    return new Uint8Array(arrayBuffer);
+    return new File([blob], fileName, {type: blob.type});
 }
 
 // Главный компонент приложения
 const App = () => {
     return {
         oncreate: async (vnode) => {
-            let dsk0 = await loadStaticAsFile('/assets/disks/xd0.dsk')
-            let dsk1 = await loadStaticAsFile('/assets/disks/xd1.dsk')
-            const obj = await WebAssembly.instantiateStreaming(fetch(wasmUrl), {
-                env: {
 
-                }
-            });
         },
         view: () => (
             <main>
                 <h1>КРОНОС</h1>
                 <p>Виртуальная машина на WebAssembly</p>
-                <md-filled-button onclick={() => alert('Кнопка сверху работает!')}>
+                <md-filled-button onclick={() => window.location.reload()}>
                     RESET
                 </md-filled-button>
-
                 {/* Рендерим наш терминал */}
                 <TerminalComponent />
+                <p>Вероятно, для входа в систему доступны пользователи (вход без пароля):
+                    <ul>
+                        <li>su /usr  </li>
+                        <li>guest /  (вход без пароля)</li>
+                        <li>sys         /sys</li>
+                    </ul>
+                </p>
             </main>
         )
     };
@@ -128,3 +125,5 @@ const $root = $('#app');
 if ($root.length) {
     m.mount($root[0], App);
 }
+
+await waitVirtualMachine();

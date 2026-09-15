@@ -6,6 +6,8 @@ import { Terminal } from 'xterm';
 import '@material/web/button/filled-button.js';
 import '@material/web/checkbox/checkbox.js';
 
+const wasmUrl = '/assets/core.wasm';
+
 // Компонент Терминала
 const TerminalComponent = () => {
     let term = null;
@@ -31,8 +33,7 @@ const TerminalComponent = () => {
                 term.open($container[0]);
 
                 // Стартовый текст
-                term.writeln('Добро пожаловать в xterm.js!');
-                term.write('\r\n$ ');
+                term.writeln('kronos.wasm');
 
                 // Простейшая обработка ввода (Echo-режим)
                 let currentLine = '';
@@ -47,7 +48,6 @@ const TerminalComponent = () => {
                             } else if (currentLine) {
                                 term.writeln(`Вы ввели: ${currentLine}`);
                             }
-                            term.write('$ ');
                             currentLine = '';
                             break;
                         case '\u007F': // Backspace (DEL)
@@ -76,14 +76,44 @@ const TerminalComponent = () => {
     };
 };
 
+async function loadStaticAsFile(url, fileName) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Ошибка сети: ${response.status}`);
+
+    // 1. Получаем Blob (сырые данные с MIME-типом)
+    const blob = await response.blob();
+
+    // 2. Оборачиваем Blob в стандартный веб-объект File
+    const file = new File([blob], fileName, { type: blob.type });
+
+    return file;
+}
+
+async function fileToUint8Array(fileOrBlob) {
+    // Получаем ArrayBuffer из объекта File или Blob
+    const arrayBuffer = await fileOrBlob.arrayBuffer();
+    // Возвращаем типизированный массив байт
+    return new Uint8Array(arrayBuffer);
+}
+
 // Главный компонент приложения
 const App = () => {
     return {
+        oncreate: async (vnode) => {
+            let dsk0 = await loadStaticAsFile('/assets/disks/xd0.dsk')
+            let dsk1 = await loadStaticAsFile('/assets/disks/xd1.dsk')
+            const obj = await WebAssembly.instantiateStreaming(fetch(wasmUrl), {
+                env: {
+
+                }
+            });
+        },
         view: () => (
             <main>
-                <h1>Mithril + Material + Xterm.js</h1>
+                <h1>КРОНОС</h1>
+                <p>Виртуальная машина на WebAssembly</p>
                 <md-filled-button onclick={() => alert('Кнопка сверху работает!')}>
-                    Material Кнопка
+                    RESET
                 </md-filled-button>
 
                 {/* Рендерим наш терминал */}

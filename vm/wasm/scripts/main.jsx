@@ -115,6 +115,7 @@ const App = () => {
                         <li>sys         /sys</li>
                     </ul>
                 </p>
+                <p>Исследовать на GitHub <a href="https://github.com/kpmy/kronos">https://github.com/kpmy/kronos</a></p>
             </main>
         )
     };

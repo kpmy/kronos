@@ -2948,6 +2948,7 @@
     (local $y i32)
     (local $z i32)
     (local $bt i32)
+    (local $x_recovered i32) ;; <-- Добавьте эту строчку к остальным local
 
     (local.set $x
       (local.get $x_in))
@@ -2958,25 +2959,29 @@
     (local.set $bt
       (i32.const 1))
 
-    ;; 1. Цикл по qabs(x) > qabs(y)
-    (block $exit_while
-      (loop $while_loop
-        (br_if $exit_while
-          (i32.le_s
-            (call $qabs
-              (local.get $x))
-            (call $qabs
-              (local.get $y))))
+    ;; 1. Цикл по qabs(x) > qabs(y) с защитой от знакового переполнения
+        (block $exit_while
+          (loop $while_loop
+            ;;; ГАРАНТИЙНЫЙ ФИКС: Если старший значащий бит y уже взведен (y >= 0x40000000),
+                     ;; то следующий shl сдвинет единицу в знаковый бит, превратив число в минус или 0.
+                     ;; Прерываем сдвиг ДО того, как это произойдет!
+                     (br_if $exit_while
+                       (i32.ge_s (local.get $y) (i32.const 0x40000000))
+                     )
 
-        (local.set $bt
-          (i32.shl
-            (local.get $bt)
-            (i32.const 1)))
-        (local.set $y
-          (i32.shl
-            (local.get $y)
-            (i32.const 1)))
-        (br $while_loop)))
+            ;; Стандартное условие: break if (qabs(x) <= qabs(y))
+            (br_if $exit_while
+              (i32.le_s
+                (call $qabs (local.get $x))
+                (call $qabs (local.get $y))
+              )
+            )
+
+            (local.set $bt (i32.shl (local.get $bt) (i32.const 1)))
+            (local.set $y  (i32.shl (local.get $y)  (i32.const 1)))
+            (br $while_loop)
+          )
+        )
 
     ;; 2. Главный бесконечный цикл восстановления остатка
     (block $exit_for
@@ -3095,6 +3100,21 @@
                 (i32.const 1)))))
 
         (br $for_loop)))
+
+;; ========================================================
+    ;; 3. ПРОВЕРКА И ВОССТАНОВЛЕНИЕ ИСХОДНОГО АРГУМЕНТА X
+    ;; ========================================================
+
+    ;; Вычисляем: x_recovered = (z * y_in) + x
+    (local.set $x_recovered
+      (i32.add
+        (i32.mul (local.get $z) (local.get $y_in))
+        (local.get $x)
+      )
+    )
+
+    ;; --- ДЕБАГ ЛОГ 500: Выводим восстановленный аргумент X в консоль ---
+    ;; (call $log_debug (i32.const 500) (local.get $x_recovered))
 
     ;; 3. Возвращаем либо остаток (x), либо частное (z)
     ;; Добавляем (result i32), чтобы Wasm знал, что этот if легально возвращает число
@@ -6400,5 +6420,190 @@
       )
     )
   )
+
+
+  ;; ========================================================
+  ;; Инструкция LEA (Опкод 0x17) — Загрузка эффективного адреса внешнего слова
+  ;; ========================================================
+  (func (export "ir_LEA")
+    (local $next1 i32)
+    (local $next2 i32)
+    (local $g i32)
+    (local $addr1 i32)
+    (local $addr2 i32)
+    (local $target_word_addr i32)
+    (local $byte_addr i32)
+    (local $max_safe_byte i32)
+
+    (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 4)))
+
+    ;; 1. Считываем первый байт-аргумент (смещение модуля)
+    (local.set $next1 (call $next))
+
+    ;; 2. Читаем текущий регистр G
+    (local.set $g (i32.load (global.get $G_ADDR)))
+
+    ;; --- ШАГ 1: addr1 = mem(g - next1 - 1) ---
+    (local.set $byte_addr (i32.mul (i32.sub (i32.sub (local.get $g) (local.get $next1)) (i32.const 1)) (i32.const 4)))
+    (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (call $push (i32.const 0)) (return))
+    )
+    (local.set $addr1 (i32.load (local.get $byte_addr)))
+
+    ;; --- ШАГ 2: addr2 = mem(addr1) ---
+    (local.set $byte_addr (i32.mul (local.get $addr1) (i32.const 4)))
+    (if (i32.or (i32.lt_s (local.get $byte_addr) (i32.const 0)) (i32.gt_s (local.get $byte_addr) (local.get $max_safe_byte)))
+      (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (call $push (i32.const 0)) (return))
+    )
+    (local.set $addr2 (i32.load (local.get $byte_addr)))
+
+    ;; 3. Считываем второй байт-аргумент (смещение переменной)
+    (local.set $next2 (call $next))
+
+    ;; --- ШАГ 3: Вычисляем словесный адрес = addr2 + next2 ---
+    (local.set $target_word_addr (i32.add (local.get $addr2) (local.get $next2)))
+
+    ;; 4. Пушим итоговый словесный адрес на стек выражений
+    (call $push (local.get $target_word_addr))
+  )
+
+
+  ;; ========================================================
+  ;; ВНУТРЕННИЙ ДИСПЕТЧЕР FPU (Обработка опкодов 0x98 .. 0x9F)
+  ;; ========================================================
+  (func $_fpu_internal (param $ir i32)
+    (local $x_bits i32)   ;; Сырые 32 бита операнда X
+    (local $y_bits i32)   ;; Сырые 32 бита операнда Y
+    (local $x_float f32)  ;; Вещественное значение X
+    (local $y_float f32)  ;; Вещественное значение Y
+    (local $sub_op i32)   ;; Суб-опкод для инструкции FFCT (0x9F)
+    (local $current_pc i32)
+
+    ;; --- ЭТАП 1: Извлечение операндов со стека выражений в порядке Java ---
+    ;; Бинарные операции (0x98..0x9C): сначала y (pop), затем x (pop)
+    (if (i32.and (i32.ge_u (local.get $ir) (i32.const 0x98)) (i32.le_u (local.get $ir) (i32.const 0x9C)))
+      (then
+        (local.set $y_bits (call $pop))
+        (local.set $x_bits (call $pop))
+        ;; Нативная битовая реинтерпретация (Си-шный union)
+        (local.set $y_float (f32.reinterpret_i32 (local.get $y_bits)))
+        (local.set $x_float (f32.reinterpret_i32 (local.get $x_bits)))
+      )
+      ;; Унарные операции (0x9D..0x9E): только x (pop)
+      (else
+        (if (i32.or (i32.eq (local.get $ir) (i32.const 0x9D)) (i32.eq (local.get $ir) (i32.const 0x9E)))
+          (then
+            (local.set $x_bits (call $pop))
+            (local.set $x_float (f32.reinterpret_i32 (local.get $x_bits)))
+          )
+        )
+      )
+    )
+
+    ;; --- ЭТАП 2: Выполнение математических и логических операций FPU ---
+    (block $exit_fpu_switch
+      ;; 0x98: FADD (Сложение)
+      (if (i32.eq (local.get $ir) (i32.const 0x98))
+        (then
+          (call $push (i32.reinterpret_f32 (f32.add (local.get $x_float) (local.get $y_float))))
+          (br $exit_fpu_switch)
+        )
+      )
+      ;; 0x99: FSUB (Вычитание)
+      (if (i32.eq (local.get $ir) (i32.const 0x99))
+        (then
+          (call $push (i32.reinterpret_f32 (f32.sub (local.get $x_float) (local.get $y_float))))
+          (br $exit_fpu_switch)
+        )
+      )
+      ;; 0x9A: FMUL (Умножение)
+      (if (i32.eq (local.get $ir) (i32.const 0x9A))
+        (then
+          (call $push (i32.reinterpret_f32 (f32.mul (local.get $x_float) (local.get $y_float))))
+          (br $exit_fpu_switch)
+        )
+      )
+      ;; 0x9B: FDIV (Деление)
+      (if (i32.eq (local.get $ir) (i32.const 0x9B))
+        (then
+          (call $push (i32.reinterpret_f32 (f32.div (local.get $x_float) (local.get $y_float))))
+          (br $exit_fpu_switch)
+        )
+      )
+      ;; 0x9C: FCMP (Вещественное сравнение)
+      (if (i32.eq (local.get $ir) (i32.const 0x9C))
+        (then
+          (if (f32.gt (local.get $x_float) (local.get $y_float))
+            (then (call $push (i32.const 1)) (call $push (i32.const 0)))
+            (else
+              (if (f32.lt (local.get $x_float) (local.get $y_float))
+                (then (call $push (i32.const 0)) (call $push (i32.const 1)))
+                (else (call $push (i32.const 0)) (call $push (i32.const 0)))
+              )
+            )
+          )
+          (br $exit_fpu_switch)
+        )
+      )
+      ;; 0x9D: FABS (Абсолютное значение / Модуль)
+      (if (i32.eq (local.get $ir) (i32.const 0x9D))
+        (then
+          (call $push (i32.reinterpret_f32 (f32.abs (local.get $x_float))))
+          (br $exit_fpu_switch)
+        )
+      )
+      ;; 0x9E: FNEG (Инверсия знака вещественного числа)
+      (if (i32.eq (local.get $ir) (i32.const 0x9E))
+        (then
+          (call $push (i32.reinterpret_f32 (f32.neg (local.get $x_float))))
+          (br $exit_fpu_switch)
+        )
+      )
+      ;; 0x9F: FFCT (Преобразования типов и кастинг)
+      (if (i32.eq (local.get $ir) (i32.const 0x9F))
+        (then
+          (local.set $sub_op (call $next))
+          (block $exit_ffct_switch
+            ;; case 0: Конвертация честного целого числа во float (Кастинг int -> float)
+            (if (i32.eqz (local.get $sub_op))
+              (then
+                ;; pop() -> кастинг во float -> реинпрепрет в биты i32 -> push
+                (call $push (i32.reinterpret_f32 (f32.convert_i32_s (call $pop))))
+                (br $exit_ffct_switch)
+              )
+            )
+            ;; case 1: Округление/усечение вещественного числа до целого (Truncate float -> int)
+            (if (i32.eq (local.get $sub_op) (i32.const 1))
+              (then
+                ;; pop() -> биты во float -> усечение до честного i32 -> push
+                (local.set $x_bits (call $pop))
+                (call $push (i32.trunc_f32_s (f32.reinterpret_i32 (local.get $x_bits))))
+                (br $exit_ffct_switch)
+              )
+            )
+            ;; default: Неизвестная суб-команда FPU -> Аппаратное прерывание
+            ;; ipt = 7; pc--;
+            (i32.store (global.get $IPT_ADDR) (i32.const 7))
+            (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+            ;; Откатываем на 2 байта (1 байт суб-опкод + 1 байт сам опкод FFCT)
+            (i32.store (global.get $PC_ADDR) (i32.sub (local.get $current_pc) (i32.const 2)))
+          )
+          (br $exit_fpu_switch)
+        )
+      )
+    )
+  )
+
+  ;; ========================================================
+  ;; ЭКСПОРТНЫЕ ПРОКСИ-ИНСТРУКЦИИ ДЛЯ АВТОМАППИНГА ОПКОДОВ
+  ;; ========================================================
+  (func (export "ir_FADD") (call $_fpu_internal (i32.const 0x98)))
+  (func (export "ir_FSUB") (call $_fpu_internal (i32.const 0x99)))
+  (func (export "ir_FMUL") (call $_fpu_internal (i32.const 0x9A)))
+  (func (export "ir_FDIV") (call $_fpu_internal (i32.const 0x9B)))
+  (func (export "ir_FCMP") (call $_fpu_internal (i32.const 0x9C)))
+  (func (export "ir_FABS") (call $_fpu_internal (i32.const 0x9D)))
+  (func (export "ir_FNEG") (call $_fpu_internal (i32.const 0x9E)))
+  (func (export "ir_FFCT") (call $_fpu_internal (i32.const 0x9F)))
 
 ) ;; module end

@@ -11,6 +11,7 @@ export class VirtualMachine {
     diskOpLater
     trace
     traceFn
+    dump
     bTimer
     bTimerDescr
 
@@ -22,6 +23,7 @@ export class VirtualMachine {
         this.diskOpLater = [];
         this.trace = [];
         this.bTimer = false;
+        this.dump = [] //debug only
     }
 
     async readBooter (diskNo) {
@@ -65,6 +67,7 @@ export class VirtualMachine {
             }
             this.diskOpLater.splice(0, this.diskOpLater.length);
             if(!badIrq) {
+                this.dumpStep()
                 this.checkTrace()
                 this.clearStack()
             }
@@ -78,6 +81,36 @@ export class VirtualMachine {
     checkTrace() {
         if (this.traceFn) {
             this.traceFn();
+        }
+    }
+
+    dumpStep() {
+        if (!this.dump){
+            return;
+        }
+        let ir = this.memory.getReg(IR);
+        let irCode = ir.toString(16).toUpperCase();
+        let irName = IR_MAP[irCode];
+        let sd = {
+            "#": this.stepIdx,
+        }
+        sd[`@${irCode}`] = irName;
+        sd['PC'] = this.memory.getReg(PC)
+        sd['IPT'] = this.memory.getReg(IPT)
+        sd['SP'] = this.memory.getReg(SP)
+        sd['MPG'] = [this.memory.getReg(M), this.memory.getReg(P), this.memory.getReg(G)];
+        sd['LFHS'] = [this.memory.getReg(L), this.memory.getReg(F), this.memory.getReg(H), this.memory.getReg(S)];
+
+        let stack = [];
+        for(let sp = 0; sp < this.memory.getReg(SP); sp++) {
+            stack.push(this.memory.getReg(STACK + sp))
+        }
+        sd['STACK'] = stack
+    //#%d: %s [0x%02X], PC %d->%d, IPT %d->%d, SP %d->%d, module MPG[%d->%d, %d->%d, %,d->%d] code LFHS[%d->%d, %d->%d, %d->%d, %d->%d], astack [%s]->[%s]
+
+        this.dump.unshift(JSON.stringify(sd))
+        if (this.dump.length > 1024) {
+            this.dump.pop()
         }
     }
 
@@ -177,8 +210,8 @@ export class VirtualMachine {
         let irCode = ir.toString(16).toUpperCase();
         let irName = IR_MAP[irCode];
         let irFunc = this.vm[`ir_${irName}`];
-        if (this.stepIdx >= 2551330){
-            //debugger
+        if (this.stepIdx >= 7000000){
+
         }
         try {
             irFunc();
@@ -223,7 +256,7 @@ export class VirtualMachine {
                 memory: this.memory.memory,
                 log_debug: function (id, value) {
                     const hexVal = "0x" + (value >>> 0).toString(16).toUpperCase();
-                    console.log(`   [Wasm Debug ${id}] output: ${hexVal}`);
+                    console.error(`   [Wasm Debug ${id}] output: ${hexVal}`);
                 },
                 io_host_call: function(port) {
                     //console.log(`[JS Host I/O] Вызвана инструкция IO. Номер порта: ${port}`);
@@ -429,10 +462,12 @@ export class VirtualMachine {
             return 0;
         case 5:
             if (dsk >= 0 && dsk < this.disks.length) {
-                //return Disks.Write(dsk, sec, &mem[adr], len);
+                let data = this.memory.load8n(adr * 4, len)
+                await this.disks[dsk].write(sec * 512, len, data);
+                return 1;
             }
-            throw "io write not implemented";
-            //return 0;
+            //throw "io write not implemented";
+            return 0;
         case 6: {
             const now = new Date();
             this.memory.store32(adr++, now.getFullYear());        // year (e.g., 2025)

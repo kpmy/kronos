@@ -5,6 +5,9 @@ export class VirtualBufferDisk {
 
     }
 
+    async write(offset, length, data) {
+        this.fileBuffer.set(data.subarray(0, offset), offset)
+    }
 
     async read(offset, length) {
         return this.fileBuffer.subarray(offset, offset + length)

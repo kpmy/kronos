@@ -21,7 +21,7 @@ export class VirtualConsoleCli extends VirtualConsole {
 
             // Переводим символ в ASCII код и кладем в очередь
             const charCode = key.charCodeAt(0);
-            console.log(charCode);
+            //console.log(charCode);
             this.read(charCode);
         });
 

@@ -52,6 +52,10 @@ export class VirtualMemory {
         this.memory8.set(data.subarray(0, length), offset);
     }
 
+    load8n(offset, length) {
+        return this.memory8.subarray(offset, offset + length);
+    }
+
     setReg(i32, reg) {
         this.reg32[reg] = i32;
     }

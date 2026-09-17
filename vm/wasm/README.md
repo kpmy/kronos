@@ -18,24 +18,14 @@ node ./index.js
 ## TODO
 
 Перечень нереализованных инструкций:
- - [ ] LEA
  - [ ] IOR
  - [ ] ARRCMP
  - [ ] WM
  - [ ] BM
- - [ ] FADD
- - [ ] FSUB
- - [ ] FMUL
- - [ ] FDIV
- - [ ] FCMP
- - [ ] FABS
- - [ ] FNEG
- - [ ] FFCT
  - [ ] FOR1
  - [ ] FOR2
  - [ ] ENTC
  - [ ] NOP
- - [ ] QUOT
  - [ ] BBU
  - [ ] BBP
  - [ ] BBLT
@@ -46,4 +36,4 @@ node ./index.js
  - [ ] DOT
  - [ ] INVLD
 
-Файловая система пока read-only.
+Файловая система пока read-only (io.write работает, но диск закеширован в памяти).

@@ -2938,11 +2938,114 @@
           (i32.const 0)
           (local.get $x)))))
 
+     ;; ========================================================================
+     ;; УЛЬТИМАТИВНАЯ ФУНКЦИЯ ДЕЛЕНИЯ КРОНОСА (ПОДДЕРЖИВАЕТ РЕЖИМЫ МОДУЛА-2 И СИ)
+     ;; param $mode: 0 = Си-режим (QUOT/REM), 1 = Вирт/Кронос-режим (DIV/MOD)
+     ;; ========================================================================
+     (func $_idiv_internal (param $x_in i32) (param $y_in i32) (param $want_remainder i32) (param $mode i32) (result i32)
+       (local $abs_x i32)
+       (local $abs_y i32)
+       (local $quot i32)
+       (local $rem i32)
+       (local $y_shifted i32)
+       (local $bt i32)
+       (local $sign_x i32)
+       (local $sign_y i32)
+
+       ;; 1. Извлекаем знаки оригинальных чисел
+       (local.set $sign_x (i32.lt_s (local.get $x_in) (i32.const 0)))
+       (local.set $sign_y (i32.lt_s (local.get $y_in) (i32.const 0)))
+
+       ;; 2. Переводим операнды в чистые абсолютные значения через $qabs
+       (local.set $abs_x (call $qabs (local.get $x_in)))
+       (local.set $abs_y (call $qabs (local.get $y_in)))
+
+       ;; Инициализируем регистры для беззнакового поразрядного деления
+       (local.set $y_shifted (local.get $abs_y))
+       (local.set $bt (i32.const 1))
+       (local.set $quot (i32.const 0))
+       (local.set $rem (local.get $abs_x))
+
+       ;; --- ШАГ 1: Масштабирование делителя ---
+       (block $exit_while
+         (loop $while_loop
+           (br_if $exit_while (i32.ge_u (local.get $y_shifted) (i32.const 0x40000000)))
+           (br_if $exit_while (i32.gt_u (local.get $y_shifted) (local.get $abs_x)))
+           (local.set $bt (i32.shl (local.get $bt) (i32.const 1)))
+           (local.set $y_shifted (i32.shl (local.get $y_shifted) (i32.const 1)))
+           (br $while_loop)
+         )
+       )
+
+       ;; --- ШАГ 2: Беззнаковый поразрядный перебор ---
+       (block $exit_for
+         (loop $for_loop
+           (if (i32.ge_u (local.get $rem) (local.get $y_shifted))
+             (then
+               (local.set $rem (i32.sub (local.get $rem) (local.get $y_shifted)))
+               (local.set $quot (i32.or (local.get $quot) (local.get $bt)))
+             )
+           )
+           (br_if $exit_for (i32.eq (local.get $bt) (i32.const 1)))
+           (local.set $bt (i32.shr_u (local.get $bt) (i32.const 1)))
+           (local.set $y_shifted (i32.shr_u (local.get $y_shifted) (i32.const 1)))
+           (br $for_loop)
+         )
+       )
+
+       ;; --- ШАГ 3: ДИНАМИЧЕСКАЯ КОРРЕКЦИЯ ЗНАКОВ ПОД РЕЖИМЫ ---
+       (if (local.get $mode)
+         ;; ----------------------------------------------------
+         ;; РЕЖИМ 1: ВИРТ / КРОНОС (Для DIV и MOD) -> Округление вниз (Floor)
+         ;; ----------------------------------------------------
+         (then
+           (if (i32.xor (local.get $sign_x) (local.get $sign_y))
+             ;; Разные знаки (наш случай: 334 и -13)
+             (then
+               (if (i32.ne (local.get $rem) (i32.const 0))
+                 (then
+                   ;; По Вирту: quot = -(quot + 1) -> -(25 + 1) = -26
+                   (local.set $quot (i32.sub (i32.const 0) (i32.add (local.get $quot) (i32.const 1))))
+                 )
+                 (else
+                   (local.set $quot (i32.sub (i32.const 0) (local.get $quot)))
+                 )
+               )
+             )
+           )
+           ;; Остаток вычисляем через инвариант: rem = x_in - (quot * y_in)
+           ;; 334 - (-26 * -13) = 334 - 338 = -4
+           (local.set $rem (i32.sub (local.get $x_in) (i32.mul (local.get $quot) (local.get $y_in))))
+         )
+         ;; ----------------------------------------------------
+         ;; РЕЖИМ 0: СИ-РЕЖИМ (Для QUOT и REM) -> Усечение к нулю (Truncate)
+         ;; ----------------------------------------------------
+         (else
+           (if (i32.xor (local.get $sign_x) (local.get $sign_y))
+             (then
+               ;; По Си: просто меняем знак без округления -> -25
+               (local.set $quot (i32.sub (i32.const 0) (local.get $quot)))
+             )
+           )
+           ;; Остаток: 334 - (-25 * -13) = 334 - 325 = 9
+           (local.set $rem (i32.sub (local.get $x_in) (i32.mul (local.get $quot) (local.get $y_in))))
+         )
+       )
+
+       ;; --- ШАГ 4: ВОЗВРАТ РЕЗУЛЬТАТА ---
+       (if (result i32)
+         (local.get $want_remainder)
+         (then (local.get $rem))
+         (else (local.get $quot))
+       )
+     )
+
+
   ;; ========================================================
   ;; Универсальный алгоритм деления в столбик _idiv
   ;; @param $want_remainder : 1 = вернуть остаток (x), 0 = вернуть частное (z)
   ;; ========================================================
-  (func $_idiv_internal
+  (func $_idiv_internal_old
     (param $x_in i32) (param $y_in i32) (param $want_remainder i32) (result i32)
     (local $x i32)
     (local $y i32)
@@ -3162,11 +3265,9 @@
               (i32.const 0)))
           (else
             ;; Вызываем функцию, запрашивая остаток (want_remainder = 1)
-            (call $push
-              (call $_idiv_internal
-                (local.get $val1)
-                (local.get $val2)
-                (i32.const 1))))))))
+            (call $push (call $_idiv_internal (local.get $val1) (local.get $val2) (i32.const 1) (i32.const 1)))
+
+                )))))
 
   ;; ========================================================
   ;; Инструкция DIV (Опкод 0x8B) — Деление (частное от _idiv)
@@ -3210,11 +3311,10 @@
           (else
             ;; 4. Успешный расчет: вызываем общую функцию деления,
             ;; запрашивая ЧАСТНОЕ (want_remainder = 0)
-            (call $push
-              (call $_idiv_internal
-                (local.get $val1)
-                (local.get $val2)
-                (i32.const 0))))))))
+            (call $push (call $_idiv_internal (local.get $val1) (local.get $val2) (i32.const 0) (i32.const 1)))
+
+
+                )))))
 
   ;; ========================================================
   ;; Инструкция INCL (Опкод 0xE0) — Включить бит в длинное множество
@@ -6605,5 +6705,108 @@
   (func (export "ir_FABS") (call $_fpu_internal (i32.const 0x9D)))
   (func (export "ir_FNEG") (call $_fpu_internal (i32.const 0x9E)))
   (func (export "ir_FFCT") (call $_fpu_internal (i32.const 0x9F)))
+
+  ;; ========================================================
+  ;; Инструкция QUOT (Опкод 0xE3) — Групповая Си-оптимизация
+  ;; ========================================================
+  (func (export "ir_QUOT")
+    (local $sub_op i32)
+    (local $sp i32)
+    (local $val2 i32)        ;; Правый операнд (вершина стека), извлекается первым
+    (local $val1 i32)        ;; Левый операнд, извлекается вторым
+    (local $current_pc i32)
+    (local $mask i32)
+
+    ;; 1. Читаем следующий байт аргумента из потока кода: next()
+    (local.set $sub_op (call $next))
+
+    ;; 2. Читаем текущий SP для верификации глубины стека
+    (local.set $sp (i32.load (global.get $SP_ADDR)))
+
+    (if (i32.le_s (local.get $sp) (i32.const 1))
+      ;; --- ВЕТКА: Нехватка элементов на стеке выражений ---
+      (then
+        (i32.store (global.get $IPT_ADDR) (i32.const 0x4C))
+      )
+      ;; --- ВЕТКА: Выполнение суб-команд ---
+      (else
+        (block $exit_quot_switch
+          ;; ====================================================
+          ;; case 0: SHRQ (Знаковый сдвиг вправо)
+          ;; ====================================================
+          (if (i32.eqz (local.get $sub_op))
+            (then
+              (local.set $val2 (call $pop))
+              (local.set $val1 (call $pop))
+              ;; val1 >> val2 (используем знаковый сдвиг i32.shr_s)
+              (call $push (i32.shr_s (local.get $val1) (local.get $val2)))
+              (br $exit_quot_switch)
+            )
+          )
+
+          ;; ====================================================
+          ;; case 1: QUOT (Си-ориентированное знаковое деление)
+          ;; ====================================================
+          (if (i32.eq (local.get $sub_op) (i32.const 1))
+            (then
+              (local.set $val2 (call $pop))
+              (local.set $val1 (call $pop))
+              ;; ЗАЩИТА: Проверяем делитель на ноль перед делением
+              (if (i32.eqz (local.get $val2))
+                (then (i32.store (global.get $IPT_ADDR) (i32.const 0x41)) (call $push (i32.const 0)))
+                (else
+                  ;; Вызываем нашу проверенную безопасную функцию, запрашивая частное (want_remainder = 0)
+                  (call $push (call $_idiv_internal (local.get $val1) (local.get $val2) (i32.const 0) (i32.const 0)))
+                )
+              )
+              (br $exit_quot_switch)
+            )
+          )
+
+          ;; ====================================================
+          ;; case 2: ANDQ (Низкоуровневое наложение битовой маски)
+          ;; ====================================================
+          (if (i32.eq (local.get $sub_op) (i32.const 2))
+            (then
+              (local.set $val2 (call $pop))
+              (local.set $val1 (call $pop))
+              ;; Вычисляем маску: (1 << val2) - 1
+              (local.set $mask (i32.sub (i32.shl (i32.const 1) (local.get $val2)) (i32.const 1)))
+              ;; val1 & mask
+              (call $push (i32.and (local.get $val1) (local.get $mask)))
+              (br $exit_quot_switch)
+            )
+          )
+
+          ;; ====================================================
+          ;; case 3: REM (Вычисление остатка от деления)
+          ;; ====================================================
+          (if (i32.eq (local.get $sub_op) (i32.const 3))
+            (then
+              (local.set $val2 (call $pop))
+              (local.set $val1 (call $pop))
+              ;; ЗАЩИТА: Проверяем делитель на ноль перед делением
+              (if (i32.eqz (local.get $val2))
+                (then (i32.store (global.get $IPT_ADDR) (i32.const 0x41)) (call $push (i32.const 0)))
+                (else
+                  ;; Вызываем нашу безопасную функцию, запрашивая остаток (want_remainder = 1)
+                 (call $push (call $_idiv_internal (local.get $val1) (local.get $val2) (i32.const 1) (i32.const 0)))
+                )
+              )
+              (br $exit_quot_switch)
+            )
+          )
+
+          ;; ====================================================
+          ;; default: Неизвестный суб-опкод -> Аппаратное прерывание
+          ;; ====================================================
+          (i32.store (global.get $IPT_ADDR) (i32.const 7))
+          (local.set $current_pc (i32.load (global.get $PC_ADDR)))
+          ;; Откатываем на 2 байта (1 байт суб-опкод + 1 байт сам опкод QUOT)
+          (i32.store (global.get $PC_ADDR) (i32.sub (local.get $current_pc) (i32.const 2)))
+        )
+      )
+    )
+  )
 
 ) ;; module end

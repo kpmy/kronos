@@ -12,6 +12,8 @@ import {Terminal} from 'xterm';
 import {VirtualMachine} from '../vm.js'
 import {VirtualWebConsole} from "../cons-xterm.js";
 import {VirtualWebDisk} from "../disk-web.js";
+import {VirtualWebTimer} from "../timer-web.js";
+import {VirtualTimer} from "../timer.js";
 
 
 async function initVirtualMachine(term) {
@@ -19,8 +21,8 @@ async function initVirtualMachine(term) {
 
     const response = await fetch('assets/core.wasm');
     const wasmModule = await WebAssembly.compile(await response.arrayBuffer());
-
-    let vm = new VirtualMachine(MEMORY_SIZE, new VirtualWebConsole(term, 0xFB8, 0x0C));
+    let timer = (window['SharedArrayBuffer']) ? new VirtualWebTimer(50) : new VirtualTimer(100);
+        let vm = new VirtualMachine(MEMORY_SIZE, new VirtualWebConsole(term, 0xFB8, 0x0C), timer);
     vm.core = wasmModule;
     for (let dsk of Array.from([await loadStaticAsFile('assets/disks/xd0.dsk'), await loadStaticAsFile('assets/disks/xd1.dsk'), await loadStaticAsFile('assets/disks/xd2.dsk')])) {
         let disk = new VirtualWebDisk(dsk);

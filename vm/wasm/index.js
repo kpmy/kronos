@@ -9,6 +9,7 @@ import wabt from "wabt";
 import {readFile, stat} from 'fs/promises'
 import * as path from "node:path";
 import {VirtualConsoleCli} from "./cons-cli.js";
+import {VirtualNodeTimer} from "./timer-node.js";
 
 
 const MEMORY_SIZE = 4 * 1024 * 1024;
@@ -96,7 +97,7 @@ let loadCore = async (vm) => {
 }
 
 (async () => {
-    let vm = new VirtualMachine(MEMORY_SIZE, new VirtualConsoleCli(0xFB8, 0x0C));
+    let vm = new VirtualMachine(MEMORY_SIZE, new VirtualConsoleCli(0xFB8, 0x0C), new VirtualNodeTimer(33));
     await loadCore(vm)
     await loadTrace(vm)
     await addDisks(vm)

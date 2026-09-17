@@ -12,18 +12,17 @@ export class VirtualMachine {
     trace
     traceFn
     dump
-    bTimer
-    bTimerDescr
+    timer
 
-    constructor(memorySizeBytes, console) {
+    constructor(memorySizeBytes, console, timer) {
         this.disks = [];
         this.memory = new VirtualMemory(memorySizeBytes);
         this.console = console;
         this.serial = new VirtualSerial();
         this.diskOpLater = [];
+        this.timer = timer;
         this.trace = [];
-        this.bTimer = false;
-        this.dump = [] //debug only
+        //this.dump = [] //debug only
     }
 
     async readBooter (diskNo) {
@@ -52,7 +51,7 @@ export class VirtualMachine {
         try {
             await this.run()
         } catch (e) {
-            clearInterval(this.bTimerDescr)
+            this.timer.stop();
             console.error(e);
         }
     }
@@ -120,11 +119,11 @@ export class VirtualMachine {
         if (ipt === 0) {
             if (this.memory.isOutOfRange())
                 ipt = 3;
-            else if (this.bTimer)
+            else if (this.bTimer('get'))
             {
                 if ((m & 0x2) !== 0)
                 {
-                    this.bTimer = false;
+                    this.bTimer('done');
                     ipt = 1; // timer ipt
                 }
             }
@@ -239,7 +238,7 @@ export class VirtualMachine {
     }
 
     stop() {
-        clearInterval(this.bTimerDescr)
+        this.timer.stop()
         this.saveRegisters()
     }
 
@@ -283,14 +282,16 @@ export class VirtualMachine {
 
         this.vm = wasmInstance.exports;
         this.vm.init_vm(this.memory.totalPages, AStackSize)
-        this.bTimerDescr = setInterval(() => {
-            this.bTimer = true;
-        }, 100)
+        this.timer.start();
         Object.values(IR_MAP).forEach(ir=> {
             if (this.vm[`ir_${ir}`] === undefined) {
                 console.error(`not implemented ${ir}`);
             }
         })
+    }
+
+    bTimer() {
+        return this.timer.timer();
     }
 
     saveRegisters() {
@@ -407,7 +408,7 @@ export class VirtualMachine {
                 break;
             }
             case 0x3: {
-                console.log("no io3", this.pop());
+                this.console._writeGuestChar(this.pop()); //internal debug
                 break;
             }
             case 0x4: {

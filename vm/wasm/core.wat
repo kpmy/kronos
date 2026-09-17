@@ -6097,137 +6097,83 @@
               (global.get $S_ADDR)
               (local.get $s)))))))
 
-  ;; ========================================================
-  ;; Инструкция COMP (Опкод 0xC3) — Побайтовое сравнение строк (strcmp)
-  ;; ========================================================
-  (func (export "ir_COMP")
-    (local $i i32) ;; Словесный адрес строки B, извлекается первым
-    (local $j i32) ;; Словесный адрес строки A, извлекается вторым
-    (local $byte_addr_b i32) ;; Текущий физический байтовый адрес в строке B
-    (local $byte_addr_a i32) ;; Текущий физический байтовый адрес в строке A
-    (local $a i32) ;; Текущий байт строки A
-    (local $b i32) ;; Текущий байт строки B
-    (local $max_safe_byte i32)
+ ;; ========================================================
+   ;; Инструкция COMP (Опкод 0xC3) — Строгая линейная копия Java
+   ;; ========================================================
+   (func (export "ir_COMP")
+     (local $i i32)            ;; Словесный адрес строки B
+     (local $j i32)            ;; Словесный адрес строки A
+     (local $base_byte_b i32)  ;; Физический адрес начала строки B (i * 4)
+     (local $base_byte_a i32)  ;; Физический адрес начала строки A (j * 4)
+     (local $pa i32)           ;; Логический оффсет pa
+     (local $pb i32)           ;; Логический оффсет pb
+     (local $phys_addr i32)
+     (local $a i32)
+     (local $b i32)
+     (local $max_safe_byte i32)
 
-    ;; 1. Извлекаем адреса строк со стека выражений строго по Java
-    (local.set $i
-      (call $pop))
-    (local.set $j
-      (call $pop))
+     ;; 1. Порядок извлечения аргументов строго по Java
+     (local.set $i (call $pop))
+     (local.set $j (call $pop))
 
-    ;; Вычисляем начальные байтовые адреса: word_addr * 4
-    (local.set $byte_addr_b
-      (i32.mul
-        (local.get $i)
-        (i32.const 4)))
-    (local.set $byte_addr_a
-      (i32.mul
-        (local.get $j)
-        (i32.const 4)))
+     ;; Вычисляем базовые байтовые адреса
+     (local.set $base_byte_a (i32.mul (local.get $i) (i32.const 4)))
+     (local.set $base_byte_b (i32.mul (local.get $j) (i32.const 4)))
 
-    (local.set $max_safe_byte
-      (i32.sub
-        (global.get $MEM_SIZE)
-        (i32.const 1)))
+     ;; Инициализируем оффсеты в 0
+     (local.set $pa (i32.const 0))
+     (local.set $pb (i32.const 0))
 
-    ;; 2. Читаем первые символы строк с мягкой проверкой границ
-    (if
-      (i32.or
-        (i32.or
-          (i32.lt_s
-            (local.get $byte_addr_a)
-            (i32.const 0))
-          (i32.gt_s
-            (local.get $byte_addr_a)
-            (local.get $max_safe_byte)))
-        (i32.or
-          (i32.lt_s
-            (local.get $byte_addr_b)
-            (i32.const 0))
-          (i32.gt_s
-            (local.get $byte_addr_b)
-            (local.get $max_safe_byte))))
-      (then
-        (i32.store
-          (global.get $IPT_ADDR)
-          (i32.const 3))
-        (local.set $a
-          (i32.const 0))
-        (local.set $b
-          (i32.const 0)))
-      (else
-        (local.set $a
-          (i32.load8_u
-            (local.get $byte_addr_a)))
-        (local.set $b
-          (i32.load8_u
-            (local.get $byte_addr_b)))))
+     (local.set $max_safe_byte (i32.sub (global.get $MEM_SIZE) (i32.const 1)))
 
-    ;; 3. Главный цикл сравнения строк: while(a == b && b != 0 && a != 0)
-    (block $exit_comp_loop
-      (loop $comp_loop
-        ;; Условия выхода из цикла:
-        (br_if $exit_comp_loop
-          (i32.ne
-            (local.get $a)
-            (local.get $b)))
-        (br_if $exit_comp_loop
-          (i32.eqz
-            (local.get $b)))
-        (br_if $exit_comp_loop
-          (i32.eqz
-            (local.get $a)))
+     ;; --- Считываем первый байт 'a' из p_a (pa++) ---
+     (local.set $phys_addr (i32.add (local.get $base_byte_a) (local.get $pa)))
+     (local.set $pa (i32.add (local.get $pa) (i32.const 1)))
+     (if (i32.or (i32.lt_s (local.get $phys_addr) (i32.const 0)) (i32.gt_s (local.get $phys_addr) (local.get $max_safe_byte)))
+       (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (local.set $a (i32.const 0)))
+       (else (local.set $a (i32.load8_s (local.get $phys_addr))))
+     )
 
-        ;; Инкрементируем байтовые адреса вперед на 1 байт
-        (local.set $byte_addr_a
-          (i32.add
-            (local.get $byte_addr_a)
-            (i32.const 1)))
-        (local.set $byte_addr_b
-          (i32.add
-            (local.get $byte_addr_b)
-            (i32.const 1)))
+     ;; --- Считываем первый байт 'b' из p_b (pb++) ---
+     (local.set $phys_addr (i32.add (local.get $base_byte_b) (local.get $pb)))
+     (local.set $pb (i32.add (local.get $pb) (i32.const 1)))
+     (if (i32.or (i32.lt_s (local.get $phys_addr) (i32.const 0)) (i32.gt_s (local.get $phys_addr) (local.get $max_safe_byte)))
+       (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (local.set $b (i32.const 0)))
+       (else (local.set $b (i32.load8_s (local.get $phys_addr))))
+     )
 
-        ;; Читаем следующие байты с проверкой границ памяти
-        (if
-          (i32.or
-            (i32.or
-              (i32.lt_s
-                (local.get $byte_addr_a)
-                (i32.const 0))
-              (i32.gt_s
-                (local.get $byte_addr_a)
-                (local.get $max_safe_byte)))
-            (i32.or
-              (i32.lt_s
-                (local.get $byte_addr_b)
-                (i32.const 0))
-              (i32.gt_s
-                (local.get $byte_addr_b)
-                (local.get $max_safe_byte))))
-          (then
-            (i32.store
-              (global.get $IPT_ADDR)
-              (i32.const 3))
-            (local.set $a
-              (i32.const 0))
-            (local.set $b
-              (i32.const 0))
-            (br $exit_comp_loop))
-          (else
-            (local.set $a
-              (i32.load8_u
-                (local.get $byte_addr_a)))
-            (local.set $b
-              (i32.load8_u
-                (local.get $byte_addr_b)))))
-        (br $comp_loop)))
+     ;; 2. Главный цикл: while (a == b && b != 0 && a != 0)
+     (block $exit_comp_loop
+       (loop $comp_loop
+         ;; Условия выхода (если не равны или встретили конец строки 0)
+         (br_if $exit_comp_loop (i32.ne (local.get $a) (local.get $b)))
+         (br_if $exit_comp_loop (i32.eqz (local.get $b)))
+         (br_if $exit_comp_loop (i32.eqz (local.get $a)))
 
-    ;; 4. Клади финальный стейт на стек в документированном (с багом) порядке Java: push(b), затем push(a)
-    (call $push
-      (local.get $b))
-    (call $push
-      (local.get $a)))
+         ;; --- Читаем следующий байт 'a' (pa++) ---
+         (local.set $phys_addr (i32.add (local.get $base_byte_a) (local.get $pa)))
+         (local.set $pa (i32.add (local.get $pa) (i32.const 1)))
+         (if (i32.or (i32.lt_s (local.get $phys_addr) (i32.const 0)) (i32.gt_s (local.get $phys_addr) (local.get $max_safe_byte)))
+           (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (local.set $a (i32.const 0)) (br $exit_comp_loop))
+           (else (local.set $a (i32.load8_s (local.get $phys_addr))))
+         )
+
+         ;; --- Читаем следующий байт 'b' (pb++) ---
+         (local.set $phys_addr (i32.add (local.get $base_byte_b) (local.get $pb)))
+         (local.set $pb (i32.add (local.get $pb) (i32.const 1)))
+         (if (i32.or (i32.lt_s (local.get $phys_addr) (i32.const 0)) (i32.gt_s (local.get $phys_addr) (local.get $max_safe_byte)))
+           (then (i32.store (global.get $IPT_ADDR) (i32.const 3)) (local.set $b (i32.const 0)) (br $exit_comp_loop))
+           (else (local.set $b (i32.load8_s (local.get $phys_addr))))
+         )
+
+         (br $comp_loop)
+       )
+     )
+
+     ;; 3. Пушим строго в порядке Java-прототипа: push(b), затем push(a)
+     (call $push (local.get $b))
+     (call $push (local.get $a))
+   )
 
   ;; ========================================================
   ;; Инструкция RCHK (Опкод 0xF5) — Проверка индекса в диапазоне [j .. i]

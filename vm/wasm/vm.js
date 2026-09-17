@@ -72,6 +72,8 @@ export class VirtualMachine {
             }
             if (this.memory.getReg(IR) === 0x87) { //IDLE
                 await new Promise(resolve => setTimeout(resolve, 1));
+            } else if (this.memory.getReg(IR) === 0x81) { //STOP
+                debugger
             }
         }
         this.stop();
@@ -108,7 +110,7 @@ export class VirtualMachine {
     //#%d: %s [0x%02X], PC %d->%d, IPT %d->%d, SP %d->%d, module MPG[%d->%d, %d->%d, %,d->%d] code LFHS[%d->%d, %d->%d, %d->%d, %d->%d], astack [%s]->[%s]
 
         this.dump.unshift(JSON.stringify(sd))
-        if (this.dump.length > 1024) {
+        if (this.dump.length > 256) {
             this.dump.pop()
         }
     }

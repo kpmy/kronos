@@ -8,11 +8,15 @@
     <meta name="description" content="Минимальный шаблон современного сайта без фреймворков.">
 
     <!-- Подключение главных стилей -->
-  <script type="module" crossorigin src="/kronos/assets/index-BDiq6_3f.js"></script>
+  <script type="module" crossorigin src="/kronos/assets/index-BjO3cT8d.js"></script>
   <link rel="stylesheet" crossorigin href="/kronos/assets/index-CN0hLfs4.css">
 </head>
 <body>
-
+<script>
+    if(window['SharedArrayBuffer'] === undefined){
+        console.log('no worker timer')
+    }
+</script>
 <div id="app"></div>
 
 <!-- Подключение главного JS в виде ESM-модуля -->

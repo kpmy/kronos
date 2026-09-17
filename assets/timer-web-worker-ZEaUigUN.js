@@ -1,0 +1,1 @@
+(function(){let e=null,t=null;self.onmessage=function(n){let{cmd:r,buffer:i,timeout:a}=n.data;if(r===`init`)e=new Uint8Array(i);else if(r===`start`){if(t)return;t=setInterval(()=>{e&&Atomics.store(e,0,1)},a)}else r===`stop`&&(t&&=(clearInterval(t),null),e&&Atomics.store(e,0,0))}})();
